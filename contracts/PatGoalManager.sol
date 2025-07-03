@@ -371,8 +371,8 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         
         goal.status = GoalStatus.FAILED;
         
-        // Make pet sad
-        petNFT.setPetMoodWithMetadata(goal.petTokenId, false, sadPetMetadataIPFS);
+        // 🔧 REMOVED: No mood setting - just update metadata
+        // petNFT.setPetMoodWithMetadata(goal.petTokenId, false, sadPetMetadataIPFS);
         
         // Distribute failed stake
         treasuryManager.distributeFailedStake(goal.stakeAmount, goal.owner);
@@ -558,4 +558,3 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         uint256 timestamp
     );
 }
-
