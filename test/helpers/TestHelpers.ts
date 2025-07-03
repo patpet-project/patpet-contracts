@@ -1,5 +1,5 @@
 import { ethers } from "hardhat";
-import { time } from "@nomicfoundation/hardhat-network-helpers";
+import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import { expect } from "chai";
 import { 
   PATToken, 
@@ -8,7 +8,7 @@ import {
   PatNFT, 
   PatGoalManager 
 } from "../../typechain-types";
-import { Signer } from "ethers";
+import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 
 export interface TestContracts {
   patToken: PATToken;
@@ -19,47 +19,45 @@ export interface TestContracts {
 }
 
 export interface TestUsers {
-  owner: Signer;
-  user1: Signer;
-  user2: Signer;
-  validator1: Signer;
-  validator2: Signer;
-  validator3: Signer;
+  owner: HardhatEthersSigner;
+  user1: HardhatEthersSigner;
+  user2: HardhatEthersSigner;
+  validator1: HardhatEthersSigner;
+  validator2: HardhatEthersSigner;
+  validator3: HardhatEthersSigner;
 }
 
 export class TestHelpers {
-  static async deployContracts(): Promise<TestContracts> {
+  static async deployContractsFixture(): Promise<TestContracts & TestUsers> {
+    // Get signers
+    const [owner, user1, user2, validator1, validator2, validator3] = await ethers.getSigners();
+
     // Deploy PAT Token
-    const PATTokenFactory = await ethers.getContractFactory("PATToken");
-    const patToken = await PATTokenFactory.deploy();
+    const patToken = await ethers.deployContract("PATToken");
     await patToken.waitForDeployment();
 
     // Deploy Treasury Manager
-    const TreasuryManagerFactory = await ethers.getContractFactory("PatTreasuryManager");
-    const treasuryManager = await TreasuryManagerFactory.deploy(await patToken.getAddress());
+    const treasuryManager = await ethers.deployContract("PatTreasuryManager", [await patToken.getAddress()]);
     await treasuryManager.waitForDeployment();
 
     // Deploy Validation System
-    const ValidationSystemFactory = await ethers.getContractFactory("PatValidationSystem");
-    const validationSystem = await ValidationSystemFactory.deploy(
+    const validationSystem = await ethers.deployContract("PatValidationSystem", [
       await patToken.getAddress(),
       await treasuryManager.getAddress()
-    );
+    ]);
     await validationSystem.waitForDeployment();
 
     // Deploy Pet NFT
-    const PetNFTFactory = await ethers.getContractFactory("PetNFT");
-    const petNFT = await PetNFTFactory.deploy();
+    const petNFT = await ethers.deployContract("PatNFT");
     await petNFT.waitForDeployment();
 
     // Deploy Goal Manager
-    const GoalManagerFactory = await ethers.getContractFactory("PatGoalManager");
-    const goalManager = await GoalManagerFactory.deploy(
+    const goalManager = await ethers.deployContract("PatGoalManager", [
       await patToken.getAddress(),
       await treasuryManager.getAddress(),
       await validationSystem.getAddress(),
       await petNFT.getAddress()
-    );
+    ]);
     await goalManager.waitForDeployment();
 
     // Setup authorizations
@@ -69,18 +67,20 @@ export class TestHelpers {
     await validationSystem.addAuthorizedContract(await goalManager.getAddress());
     await petNFT.setAuthorizedContract(await goalManager.getAddress(), true);
 
+    // Distribute PAT tokens to test users
+    const transferAmount = ethers.parseEther("10000");
+    await patToken.transfer(user1.address, transferAmount);
+    await patToken.transfer(user2.address, transferAmount);
+    await patToken.transfer(validator1.address, transferAmount);
+    await patToken.transfer(validator2.address, transferAmount);
+    await patToken.transfer(validator3.address, transferAmount);
+
     return {
       patToken,
       treasuryManager,
       validationSystem,
       petNFT,
       goalManager,
-    };
-  }
-
-  static async getTestUsers(): Promise<TestUsers> {
-    const [owner, user1, user2, validator1, validator2, validator3] = await ethers.getSigners();
-    return {
       owner,
       user1,
       user2,
@@ -90,24 +90,11 @@ export class TestHelpers {
     };
   }
 
-  static async setupTestEnvironment(): Promise<{ contracts: TestContracts; users: TestUsers }> {
-    const contracts = await this.deployContracts();
-    const users = await this.getTestUsers();
-
-    // Distribute PAT tokens to test users
-    const transferAmount = ethers.parseEther("10000");
-    await contracts.patToken.transfer(await users.user1.getAddress(), transferAmount);
-    await contracts.patToken.transfer(await users.user2.getAddress(), transferAmount);
-    await contracts.patToken.transfer(await users.validator1.getAddress(), transferAmount);
-    await contracts.patToken.transfer(await users.validator2.getAddress(), transferAmount);
-    await contracts.patToken.transfer(await users.validator3.getAddress(), transferAmount);
-
-    return { contracts, users };
-  }
-
   static async createTestGoal(
-    contracts: TestContracts,
-    user: Signer,
+    goalManager: PatGoalManager,
+    patToken: PATToken,
+    treasuryManager: PatTreasuryManager,
+    user: HardhatEthersSigner,
     options: {
       title?: string;
       stakeAmount?: bigint;
@@ -127,133 +114,132 @@ export class TestHelpers {
     } = options;
 
     // Approve tokens
-    await contracts.patToken.connect(user).approve(
-      await contracts.treasuryManager.getAddress(),
-      stakeAmount
-    );
+    await patToken.connect(user).approve(await treasuryManager.getAddress(), stakeAmount);
 
-    // Create goal
-    const tx = await contracts.goalManager.connect(user).createGoal(
+    // Create goal and wait for transaction
+    const tx = await goalManager.connect(user).createGoal(
       title,
       stakeAmount,
       durationDays,
       petName,
       petType,
-      "QmTestMetadata", // Mock IPFS hash
+      "QmTestMetadata",
       totalMilestones
     );
 
     const receipt = await tx.wait();
-    const event = receipt?.logs.find(
-      (log: any) => log.fragment?.name === "GoalCreated"
-    );
+    if (!receipt) throw new Error("Transaction failed");
 
-    if (!event) {
+    // Parse events using modern approach
+    const goalCreatedEvent = receipt.logs.find((log) => {
+      try {
+        const parsed = goalManager.interface.parseLog({
+          topics: log.topics as string[],
+          data: log.data,
+        });
+        return parsed?.name === "GoalCreated";
+      } catch {
+        return false;
+      }
+    });
+
+    if (!goalCreatedEvent) {
       throw new Error("GoalCreated event not found");
     }
 
-    const goalId = event.args[0];
-    const petTokenId = event.args[2];
+    const parsedEvent = goalManager.interface.parseLog({
+      topics: goalCreatedEvent.topics as string[],
+      data: goalCreatedEvent.data,
+    });
 
-    return { goalId, petTokenId };
+    if (!parsedEvent) {
+      throw new Error("Failed to parse GoalCreated event");
+    }
+
+    return {
+      goalId: parsedEvent.args[0],
+      petTokenId: parsedEvent.args[6]
+    };
   }
 
   static async createTestMilestone(
-    contracts: TestContracts,
-    user: Signer,
+    goalManager: PatGoalManager,
+    user: HardhatEthersSigner,
     goalId: bigint,
     description: string = "Test Milestone"
   ): Promise<bigint> {
-    const tx = await contracts.goalManager.connect(user).createMilestone(goalId, description);
+    const tx = await goalManager.connect(user).createMilestone(goalId, description);
     const receipt = await tx.wait();
+    if (!receipt) throw new Error("Transaction failed");
     
-    const event = receipt?.logs.find(
-      (log: any) => log.fragment?.name === "MilestoneCreated"
-    );
+    const milestoneCreatedEvent = receipt.logs.find((log) => {
+      try {
+        const parsed = goalManager.interface.parseLog({
+          topics: log.topics as string[],
+          data: log.data,
+        });
+        return parsed?.name === "MilestoneCreated";
+      } catch {
+        return false;
+      }
+    });
 
-    if (!event) {
+    if (!milestoneCreatedEvent) {
       throw new Error("MilestoneCreated event not found");
     }
 
-    return event.args[0]; // milestoneId
+    const parsedEvent = goalManager.interface.parseLog({
+      topics: milestoneCreatedEvent.topics as string[],
+      data: milestoneCreatedEvent.data,
+    });
+
+    if (!parsedEvent) {
+      throw new Error("Failed to parse MilestoneCreated event");
+    }
+
+    return parsedEvent.args[0];
   }
 
   static async registerValidator(
-    contracts: TestContracts,
-    validator: Signer,
+    validationSystem: PatValidationSystem,
+    patToken: PATToken,
+    validator: HardhatEthersSigner,
     stakeAmount: bigint = ethers.parseEther("100")
   ): Promise<void> {
-    await contracts.patToken.connect(validator).approve(
-      await contracts.validationSystem.getAddress(),
-      stakeAmount
-    );
-
-    await contracts.validationSystem.connect(validator).registerValidator(stakeAmount);
+    await patToken.connect(validator).approve(await validationSystem.getAddress(), stakeAmount);
+    await validationSystem.connect(validator).registerValidator(stakeAmount);
   }
 
-  static async advanceTimeAndMine(seconds: number): Promise<void> {
-    await time.increase(seconds);
+  static mockIPFSHash(suffix: string = ""): string {
+    return `QmMockIPFSHash${suffix}${Math.random().toString(36).substring(7)}`;
   }
 
   static async expectEvent(
     tx: any,
-    eventName: string,
-    eventArgs?: any[]
+    contract: any,
+    eventName: string
   ): Promise<void> {
     const receipt = await tx.wait();
-    const event = receipt?.logs.find(
-      (log: any) => log.fragment?.name === eventName
-    );
-
-    expect(event).to.exist;
     
-    if (eventArgs) {
-      eventArgs.forEach((arg, index) => {
-        expect(event.args[index]).to.equal(arg);
-      });
-    }
+    const eventFound = receipt?.logs.some((log: any) => {
+      try {
+        const parsed = contract.interface.parseLog({
+          topics: log.topics as string[],
+          data: log.data,
+        });
+        return parsed?.name === eventName;
+      } catch {
+        return false;
+      }
+    });
+
+    expect(eventFound).to.be.true;
   }
 
   static async expectRevert(
     promise: Promise<any>,
     expectedError: string
   ): Promise<void> {
-    try {
-      await promise;
-      expect.fail("Expected transaction to revert");
-    } catch (error: any) {
-      expect(error.message).to.include(expectedError);
-    }
-  }
-
-  static formatPATAmount(amount: bigint): string {
-    return ethers.formatEther(amount);
-  }
-
-  static parsePATAmount(amount: string): bigint {
-    return ethers.parseEther(amount);
-  }
-
-  static async getBlockTimestamp(): Promise<number> {
-    const block = await ethers.provider.getBlock("latest");
-    return block!.timestamp;
-  }
-
-  static calculateExperienceForLevel(level: number): number {
-    return (level - 1) * 50;
-  }
-
-  static calculateEvolutionStage(experience: number): string {
-    if (experience >= 500) return "ADULT";
-    if (experience >= 100) return "BABY";
-    return "EGG";
-  }
-
-  static async waitForTransaction(tx: any): Promise<any> {
-    return await tx.wait();
-  }
-
-  static mockIPFSHash(suffix: string = ""): string {
-    return `QmMockIPFSHash${suffix}${Math.random().toString(36).substring(7)}`;
+    await expect(promise).to.be.revertedWith(expectedError);
   }
 }

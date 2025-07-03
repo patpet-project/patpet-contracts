@@ -26,7 +26,7 @@ Frontend ↔ Smart Contracts ↔ Ponder Indexer ↔ GraphQL API
 ```
 
 ### Core Components
-- **5 Smart Contracts**: PAT Token, Treasury, Validation, Pet NFT, Goal Manager
+- **5 Smart Contracts**: PATToken, PatTreasuryManager, PatValidationSystem, PatNFT, PatGoalManager
 - **Ponder Indexer**: Real-time event indexing and GraphQL API
 - **Pinata IPFS**: Decentralized metadata storage for pet images/data
 
@@ -39,9 +39,9 @@ Frontend ↔ Smart Contracts ↔ Ponder Indexer ↔ GraphQL API
 sequenceDiagram
     User->>Frontend: Create Goal
     Frontend->>Pinata: Upload Pet Metadata
-    Frontend->>GoalManager: createGoal()
-    GoalManager->>PetNFT: mintPet()
-    GoalManager->>TreasuryManager: receiveStake()
+    Frontend->>PatGoalManager: createGoal()
+    PatGoalManager->>PatNFT: mintPet()
+    PatGoalManager->>PatTreasuryManager: receiveStake()
     Contract->>Ponder: Emit Events
     Ponder->>Frontend: Real-time Updates
 ```
@@ -51,11 +51,11 @@ sequenceDiagram
 sequenceDiagram
     User->>Frontend: Submit Evidence
     Frontend->>Pinata: Upload Evidence
-    Frontend->>GoalManager: submitMilestone()
-    GoalManager->>ValidationSystem: requestValidation()
-    Validators->>ValidationSystem: submitValidation()
-    ValidationSystem->>GoalManager: processMilestoneValidation()
-    GoalManager->>PetNFT: addExperienceWithMetadata()
+    Frontend->>PatGoalManager: submitMilestone()
+    PatGoalManager->>PatValidationSystem: requestValidation()
+    Validators->>PatValidationSystem: submitValidation()
+    PatValidationSystem->>PatGoalManager: completeMilestone()
+    PatGoalManager->>PatNFT: addExperienceWithMetadata()
     Contract->>Ponder: Emit Events
     Ponder->>Frontend: Pet Evolution/XP Updates
 ```
@@ -63,11 +63,11 @@ sequenceDiagram
 ### 3. Pet Evolution Flow
 ```mermaid
 sequenceDiagram
-    Milestone->>PetNFT: addExperienceWithMetadata()
-    PetNFT->>PetNFT: Check Evolution Thresholds
-    PetNFT->>Frontend: Generate New Metadata
+    Milestone->>PatNFT: addExperienceWithMetadata()
+    PatNFT->>PatNFT: Check Evolution Thresholds
+    PatNFT->>Frontend: Generate New Metadata
     Frontend->>Pinata: Upload Updated Metadata
-    PetNFT->>Ponder: Emit PetEvolved Event
+    PatNFT->>Ponder: Emit PetEvolved Event
     Ponder->>Frontend: Real-time Evolution Update
 ```
 
@@ -80,22 +80,28 @@ sequenceDiagram
 // Contract addresses (from deployment)
 const CONTRACTS = {
   PAT_TOKEN: "0x...",
-  TREASURY_MANAGER: "0x...", 
-  VALIDATION_SYSTEM: "0x...",
-  PET_NFT: "0x...",
-  GOAL_MANAGER: "0x..."
+  PAT_TREASURY_MANAGER: "0x...", 
+  PAT_VALIDATION_SYSTEM: "0x...",
+  PAT_NFT: "0x...",
+  PAT_GOAL_MANAGER: "0x..."
 };
 
 // ABI imports
-import { PATTokenABI, GoalManagerABI, PetNFTABI } from './abis';
+import { 
+  PATTokenABI, 
+  PatGoalManagerABI, 
+  PatNFTABI,
+  PatTreasuryManagerABI,
+  PatValidationSystemABI 
+} from './abis';
 ```
 
 ### Primary Write Functions by User Action
 
 #### 1. Create Goal
 ```javascript
-// Contract: GoalManager
-await goalManager.createGoal(
+// Contract: PatGoalManager
+await patGoalManager.createGoal(
   title,                    // string
   stakeAmount,             // uint256 (in wei)
   durationDays,            // uint256
@@ -108,8 +114,8 @@ await goalManager.createGoal(
 
 #### 2. Create Milestone
 ```javascript
-// Contract: GoalManager
-await goalManager.createMilestone(
+// Contract: PatGoalManager
+await patGoalManager.createMilestone(
   goalId,                  // uint256
   description              // string
 );
@@ -117,8 +123,8 @@ await goalManager.createMilestone(
 
 #### 3. Submit Milestone Evidence
 ```javascript
-// Contract: GoalManager
-await goalManager.submitMilestone(
+// Contract: PatGoalManager
+await patGoalManager.submitMilestone(
   milestoneId,            // uint256
   evidenceIPFS            // string (from Pinata)
 );
@@ -128,24 +134,48 @@ await goalManager.submitMilestone(
 ```javascript
 // Contract: PATToken (before creating goals)
 await patToken.approve(
-  CONTRACTS.TREASURY_MANAGER,  // spender
-  stakeAmount                  // amount
+  CONTRACTS.PAT_TREASURY_MANAGER,  // spender
+  stakeAmount                      // amount
+);
+```
+
+#### 5. Register as Validator
+```javascript
+// Contract: PatValidationSystem
+await patValidationSystem.registerValidator(
+  stakeAmount              // uint256 (minimum 50 PAT)
+);
+```
+
+#### 6. Submit Validation
+```javascript
+// Contract: PatValidationSystem
+await patValidationSystem.submitValidation(
+  milestoneId,            // uint256
+  approve,                // bool
+  comment                 // string
 );
 ```
 
 ### Read-Only Functions (Use Sparingly)
 ```javascript
 // Check if goal exists and is active
-const isActive = await goalManager.isGoalActive(goalId);
+const isActive = await patGoalManager.isGoalActive(goalId);
 
 // Check if goal is expired
-const isExpired = await goalManager.isGoalExpired(goalId);
+const isExpired = await patGoalManager.isGoalExpired(goalId);
 
 // Get pet existence
-const exists = await petNFT.exists(tokenId);
+const exists = await patNFT.exists(tokenId);
 
 // Get total supply
-const totalSupply = await petNFT.totalSupply();
+const totalSupply = await patNFT.totalSupply();
+
+// Get stake tier info
+const tierInfo = await patTreasuryManager.getStakeTierInfo(tierIndex);
+
+// Calculate potential reward
+const [totalReward, bonusReward, tier] = await patTreasuryManager.calculateReward(stakeAmount);
 ```
 
 ---
@@ -169,8 +199,8 @@ const generatePetMetadata = (petData) => ({
   image: `ipfs://${getImageHash(petData.petType, petData.stage, petData.isHappy)}`,
   external_url: `https://patpet.xyz/pet/${petData.tokenId}`,
   attributes: [
-    { trait_type: "Pet Type", value: petData.petType },
-    { trait_type: "Evolution Stage", value: petData.stage },
+    { trait_type: "Pet Type", value: getPetTypeName(petData.petType) },
+    { trait_type: "Evolution Stage", value: getStageName(petData.stage) },
     { trait_type: "Level", value: petData.level },
     { trait_type: "Experience", value: petData.experience },
     { trait_type: "Mood", value: petData.isHappy ? "Happy" : "Sad" },
@@ -181,9 +211,27 @@ const generatePetMetadata = (petData) => ({
   ],
   properties: {
     last_updated: Date.now(),
-    version: petData.version || 1
+    version: petData.version || 1,
+    pet_type_numeric: petData.petType,
+    stage_numeric: petData.stage
   }
 });
+
+// Helper functions
+const getPetTypeName = (petType) => {
+  const types = ["Dragon", "Cat", "Plant"];
+  return types[petType] || "Unknown";
+};
+
+const getStageName = (stage) => {
+  const stages = ["Egg", "Baby", "Adult"];
+  return stages[stage] || "Unknown";
+};
+
+const getRarityFromStage = (stage) => {
+  const rarities = ["Common", "Rare", "Legendary"];
+  return rarities[stage] || "Common";
+};
 ```
 
 ### Image Hash Mapping
@@ -205,6 +253,14 @@ const IMAGE_HASHES = {
     ADULT: { happy: "QmPlantAdultHappyPNG", sad: "QmPlantAdultSadPNG" }
   }
 };
+
+const getImageHash = (petType, stage, isHappy) => {
+  const typeNames = ["DRAGON", "CAT", "PLANT"];
+  const stageNames = ["EGG", "BABY", "ADULT"];
+  const mood = isHappy ? "happy" : "sad";
+  
+  return IMAGE_HASHES[typeNames[petType]]?.[stageNames[stage]]?.[mood] || "QmDefaultPetPNG";
+};
 ```
 
 ### Upload Functions
@@ -225,7 +281,8 @@ const uploadMetadata = async (metadata, tokenId) => {
         keyvalues: {
           type: 'pet_metadata',
           tokenId: tokenId?.toString() || 'new',
-          timestamp: Date.now().toString()
+          timestamp: Date.now().toString(),
+          petType: metadata.attributes.find(attr => attr.trait_type === "Pet Type")?.value || 'Unknown'
         }
       }
     })
@@ -239,6 +296,16 @@ const uploadMetadata = async (metadata, tokenId) => {
 const uploadEvidence = async (file) => {
   const formData = new FormData();
   formData.append('file', file);
+  
+  const metadata = JSON.stringify({
+    name: `evidence-${Date.now()}`,
+    keyvalues: {
+      type: 'milestone_evidence',
+      timestamp: Date.now().toString(),
+      fileType: file.type
+    }
+  });
+  formData.append('pinataMetadata', metadata);
   
   const response = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
     method: 'POST',
@@ -274,7 +341,6 @@ query GetUserGoals($userAddress: String!) {
     petType
     petName
     timestamp
-    status
     milestonesCompleted
   }
 }
@@ -312,6 +378,14 @@ query GetGoalDetails($goalId: String!) {
     progressPercentage
     timestamp
   }
+  
+  milestoneSubmitteds(where: { goalId: $goalId }) {
+    id
+    milestoneId
+    submitter
+    evidenceIPFS
+    timestamp
+  }
 }
 ```
 
@@ -335,6 +409,7 @@ query GetPetDetails($tokenId: String!) {
     newTotalExperience
     newLevel
     reason
+    newMetadataIPFS
     timestamp
   }
   
@@ -344,6 +419,7 @@ query GetPetDetails($tokenId: String!) {
     toStage
     currentExperience
     evolutionTime
+    newMetadataIPFS
     timestamp
   }
   
@@ -352,6 +428,76 @@ query GetPetDetails($tokenId: String!) {
     oldMood
     newMood
     reason
+    newMetadataIPFS
+    timestamp
+  }
+  
+  milestoneCompleteds(where: { tokenId: $tokenId }) {
+    id
+    newMilestoneCount
+    timestamp
+  }
+}
+```
+
+### Validation System Queries
+
+#### Get Validation Requests for Validator
+```graphql
+query GetValidatorRequests($validatorAddress: String!) {
+  validationRequesteds(where: { assignedValidators_contains: [$validatorAddress] }) {
+    id
+    milestoneId
+    submitter
+    evidenceIPFS
+    goalStakeAmount
+    requiredValidators
+    assignedValidators
+    deadline
+    timestamp
+  }
+  
+  validationSubmitteds(where: { validator: $validatorAddress }) {
+    id
+    milestoneId
+    approved
+    comment
+    currentApprovals
+    currentRejections
+    timestamp
+  }
+}
+```
+
+#### Get Validator Profile
+```graphql
+query GetValidatorProfile($validatorAddress: String!) {
+  validatorRegistereds(where: { validator: $validatorAddress }) {
+    id
+    validator
+    stakedAmount
+    initialReputationScore
+    timestamp
+  }
+  
+  reputationUpdateds(where: { validator: $validatorAddress }) {
+    id
+    oldReputationScore
+    newReputationScore
+    wasAccurate
+    totalValidations
+    accurateValidations
+    accuracyRate
+    timestamp
+  }
+  
+  validatorRewardeds(where: { validator: $validatorAddress }) {
+    id
+    milestoneId
+    amount
+    wasAccurate
+    bonusPercentage
+    newReputationScore
     timestamp
   }
 }
@@ -369,7 +515,9 @@ query GetPlatformStats {
     failedGoals
     successRate
     totalStakeAmount
+    totalMilestonesCreated
     totalMilestonesCompleted
+    averageGoalDuration
     timestamp
   }
   
@@ -383,12 +531,7 @@ query GetPlatformStats {
     averageExperience
     timestamp
   }
-}
-```
-
-#### Validation Statistics
-```graphql
-query GetValidationStats {
+  
   validationStatistics(orderBy: timestamp, orderDirection: desc, first: 1) {
     totalRequests
     totalCompleted
@@ -397,35 +540,38 @@ query GetValidationStats {
     systemAccuracyRate
     timestamp
   }
-  
-  validatorRegistereds {
-    validator
-    stakedAmount
-    totalActiveValidators
-    timestamp
-  }
 }
 ```
 
 #### Treasury Analytics
 ```graphql
 query GetTreasuryStats {
-  treasuryStatistics(orderBy: timestamp, orderDirection: desc, first: 1) {
-    totalStakesReceived
+  ecosystemSnapshots(orderBy: timestamp, orderDirection: desc, first: 1) {
+    totalSupply
+    maxSupply
     totalRewardsDistributed
-    totalTokensBurned
-    totalGoalsCompleted
-    totalGoalsFailed
-    successRate
+    totalStakesLost
+    remainingMintable
     timestamp
   }
   
-  poolBalancesSnapshots(orderBy: timestamp, orderDirection: desc, first: 1) {
-    rewardPool
-    insurancePool
-    validatorPool
-    developmentPool
-    totalBalance
+  rewardDistributeds {
+    id
+    recipient
+    amount
+    reason
+    distributor
+    newTotalRewards
+    timestamp
+  }
+  
+  stakeLostRecordeds {
+    id
+    user
+    amount
+    reason
+    recorder
+    newTotalStakesLost
     timestamp
   }
 }
@@ -455,6 +601,24 @@ subscription GoalEvents($userAddress: String!) {
     toStage
     timestamp
   }
+  
+  goalCompleteds(where: { owner: $userAddress }) {
+    goalId
+    totalMilestonesCompleted
+    bonusXPAwarded
+    stakeReward
+    wasEarlyCompletion
+    timestamp
+  }
+  
+  goalFaileds(where: { owner: $userAddress }) {
+    goalId
+    milestonesCompleted
+    totalMilestones
+    stakeLost
+    failureReason
+    timestamp
+  }
 }
 ```
 
@@ -467,61 +631,215 @@ subscription GoalEvents($userAddress: String!) {
 #### Goal Events
 ```javascript
 // Listen for goal completion
-goalManager.on('GoalCompleted', (goalId, owner, milestonesCompleted, bonusXP, stakeReward, completionTime, wasEarly, petMetadata, timestamp) => {
+patGoalManager.on('GoalCompleted', (
+  goalId, 
+  owner, 
+  totalMilestonesCompleted, 
+  bonusXPAwarded, 
+  stakeReward, 
+  completionTime, 
+  wasEarlyCompletion, 
+  finalPetMetadataIPFS, 
+  timestamp
+) => {
   // Update UI with completion celebration
-  // Show rewards earned
-  // Display final pet evolution
+  showCompletionAnimation();
+  displayRewardsSummary({
+    bonusXP: bonusXPAwarded,
+    stakeReward: stakeReward,
+    earlyBonus: wasEarlyCompletion
+  });
+  // Update pet to final evolved state
+  updatePetDisplay(finalPetMetadataIPFS);
 });
 
 // Listen for goal failure
-goalManager.on('GoalFailed', (goalId, owner, milestonesCompleted, totalMilestones, stakeLost, reason, sadPetMetadata, timestamp) => {
+patGoalManager.on('GoalFailed', (
+  goalId, 
+  owner, 
+  milestonesCompleted, 
+  totalMilestones, 
+  stakeLost, 
+  failureReason, 
+  sadPetMetadataIPFS, 
+  timestamp
+) => {
   // Update UI with failure state
+  showFailureAnimation();
+  displayStakeLoss(stakeLost);
   // Show pet sad animation
-  // Display stake lost information
+  updatePetDisplay(sadPetMetadataIPFS);
+  showFailureReason(failureReason);
 });
 ```
 
 #### Milestone Events
 ```javascript
 // Listen for milestone completion
-goalManager.on('MilestoneCompleted', (milestoneId, goalId, owner, xpAwarded, newMilestonesCompleted, totalMilestones, progressPercentage, petMetadata, timestamp) => {
+patGoalManager.on('MilestoneCompleted', (
+  milestoneId, 
+  goalId, 
+  goalOwner, 
+  xpAwarded, 
+  newMilestonesCompleted, 
+  totalMilestones, 
+  progressPercentage, 
+  petMetadataIPFS, 
+  timestamp
+) => {
   // Update progress bar
+  updateProgressBar(progressPercentage);
   // Show XP gained animation
-  // Check for pet evolution
+  showXPGainedAnimation(xpAwarded);
+  // Update pet display
+  updatePetDisplay(petMetadataIPFS);
+  // Check for potential evolution
+  checkEvolutionThreshold(newMilestonesCompleted * 25);
 });
 
 // Listen for milestone rejection
-goalManager.on('MilestoneRejected', (milestoneId, goalId, owner, reason, sadPetMetadata, timestamp) => {
+patGoalManager.on('MilestoneRejected', (
+  milestoneId, 
+  goalId, 
+  goalOwner, 
+  reason, 
+  sadPetMetadataIPFS, 
+  timestamp
+) => {
   // Show rejection notification
+  showRejectionNotification(reason);
   // Display feedback to user
+  displayValidationFeedback(milestoneId);
   // Update pet to sad state
+  updatePetDisplay(sadPetMetadataIPFS);
 });
 ```
 
 #### Pet Events
 ```javascript
 // Listen for pet evolution
-petNFT.on('PetEvolved', (tokenId, goalId, owner, fromStage, toStage, currentExperience, evolutionTime, newMetadata, timestamp) => {
+patNFT.on('PetEvolved', (
+  tokenId, 
+  goalId, 
+  owner, 
+  fromStage, 
+  toStage, 
+  currentExperience, 
+  evolutionTime, 
+  newMetadataIPFS, 
+  timestamp
+) => {
   // Show evolution animation
+  showEvolutionAnimation(fromStage, toStage);
   // Update pet display
+  updatePetDisplay(newMetadataIPFS);
   // Celebrate milestone achievement
+  showEvolutionCelebration();
+  // Update achievement badges
+  updateAchievements(toStage);
 });
 
 // Listen for mood changes
-petNFT.on('PetMoodChanged', (tokenId, goalId, owner, oldMood, newMood, reason, newMetadata, timestamp) => {
+patNFT.on('PetMoodChanged', (
+  tokenId, 
+  goalId, 
+  owner, 
+  oldMood, 
+  newMood, 
+  reason, 
+  newMetadataIPFS, 
+  timestamp
+) => {
   // Update pet expression
+  updatePetExpression(newMood);
   // Show appropriate animations
+  if (newMood) {
+    showHappyAnimation();
+  } else {
+    showSadAnimation();
+  }
   // Display mood change reason
+  showMoodChangeReason(reason);
+  // Update metadata
+  updatePetDisplay(newMetadataIPFS);
+});
+
+// Listen for experience gained
+patNFT.on('ExperienceGained', (
+  tokenId, 
+  goalId, 
+  owner, 
+  experienceAmount, 
+  newTotalExperience, 
+  oldLevel, 
+  newLevel, 
+  reason, 
+  newMetadataIPFS, 
+  timestamp
+) => {
+  // Show XP animation
+  animateXPGain(experienceAmount);
+  // Update XP bar
+  updateExperienceBar(newTotalExperience);
+  // Check for level up
+  if (newLevel > oldLevel) {
+    showLevelUpAnimation(newLevel);
+  }
+  // Update pet display
+  updatePetDisplay(newMetadataIPFS);
 });
 ```
 
 #### Validation Events
 ```javascript
 // Listen for validation resolution
-validationSystem.on('ValidationResolved', (milestoneId, status, approvals, rejections, validators, votes, resolutionTime, timestamp) => {
+patValidationSystem.on('ValidationResolved', (
+  milestoneId, 
+  status, 
+  totalApprovals, 
+  totalRejections, 
+  totalValidators, 
+  validators, 
+  votes, 
+  resolutionTime, 
+  timestamp
+) => {
   // Update milestone status
+  updateMilestoneStatus(milestoneId, status);
   // Show validation results
+  displayValidationResults({
+    approvals: totalApprovals,
+    rejections: totalRejections,
+    validators: validators,
+    votes: votes
+  });
   // Trigger appropriate pet updates
+  if (status === 'APPROVED') {
+    triggerMilestoneCompletion(milestoneId);
+  } else {
+    triggerMilestoneRejection(milestoneId);
+  }
+});
+
+// Listen for validator rewards
+patValidationSystem.on('ValidatorRewarded', (
+  validator, 
+  milestoneId, 
+  amount, 
+  wasAccurate, 
+  bonusPercentage, 
+  newReputationScore, 
+  timestamp
+) => {
+  // Show validator reward notification
+  if (validator === currentUserAddress) {
+    showValidatorReward({
+      amount: amount,
+      accuracy: wasAccurate,
+      bonus: bonusPercentage,
+      reputation: newReputationScore
+    });
+  }
 });
 ```
 
@@ -533,34 +851,77 @@ validationSystem.on('ValidationResolved', (milestoneId, status, approvals, rejec
 
 #### Transaction Errors
 ```javascript
-try {
-  const tx = await goalManager.createGoal(...params);
-  await tx.wait();
-} catch (error) {
+const handleTransactionError = async (error, operation) => {
+  console.error(`Transaction failed for ${operation}:`, error);
+  
   if (error.code === 'INSUFFICIENT_FUNDS') {
     showError('Insufficient ETH for gas fees');
   } else if (error.message.includes('Transfer failed')) {
     showError('Insufficient PAT tokens or approval needed');
   } else if (error.code === 'USER_REJECTED') {
     showError('Transaction cancelled by user');
+  } else if (error.message.includes('Not authorized')) {
+    showError('Contract authorization error - please contact support');
+  } else if (error.message.includes('Goal not active')) {
+    showError('This goal is no longer active');
+  } else if (error.message.includes('Already completed')) {
+    showError('This milestone has already been completed');
+  } else if (error.message.includes('Validation deadline passed')) {
+    showError('Validation period has expired');
   } else {
-    showError('Transaction failed: ' + error.message);
+    showError(`Transaction failed: ${error.message}`);
   }
+};
+
+// Usage
+try {
+  const tx = await patGoalManager.createGoal(...params);
+  await tx.wait();
+} catch (error) {
+  handleTransactionError(error, 'goal creation');
 }
 ```
 
-#### Contract Interaction Errors
+#### Contract State Validation
 ```javascript
 // Check contract state before transactions
-const checkGoalState = async (goalId) => {
-  const isActive = await goalManager.isGoalActive(goalId);
-  const isExpired = await goalManager.isGoalExpired(goalId);
-  
-  if (!isActive) {
-    throw new Error('Goal is not active');
+const validateGoalState = async (goalId) => {
+  try {
+    const isActive = await patGoalManager.isGoalActive(goalId);
+    const isExpired = await patGoalManager.isGoalExpired(goalId);
+    
+    if (!isActive) {
+      throw new Error('Goal is not active');
+    }
+    if (isExpired) {
+      throw new Error('Goal has expired');
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Goal state validation failed:', error);
+    return false;
   }
-  if (isExpired) {
-    throw new Error('Goal has expired');
+};
+
+// Check validator eligibility
+const validateValidatorState = async (validatorAddress) => {
+  try {
+    // Query Ponder for validator status
+    const { data } = await apolloClient.query({
+      query: GET_VALIDATOR_PROFILE,
+      variables: { validatorAddress }
+    });
+    
+    if (!data.validatorRegistereds.length) {
+      throw new Error('Not registered as validator');
+    }
+    
+    // Additional checks can be added here
+    return true;
+  } catch (error) {
+    console.error('Validator state validation failed:', error);
+    return false;
   }
 };
 ```
@@ -568,101 +929,260 @@ const checkGoalState = async (goalId) => {
 #### Pinata Upload Errors
 ```javascript
 const handlePinataError = (error) => {
+  console.error('Pinata upload error:', error);
+  
   if (error.status === 401) {
     return 'Invalid Pinata API credentials';
   } else if (error.status === 413) {
-    return 'File too large for upload';
+    return 'File too large for upload (max 100MB)';
   } else if (error.status === 429) {
     return 'Rate limit exceeded, please try again later';
+  } else if (error.name === 'NetworkError') {
+    return 'Network error - please check your connection';
   } else {
     return 'Upload failed, please try again';
+  }
+};
+
+const uploadWithRetry = async (uploadFunction, maxRetries = 3) => {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await uploadFunction();
+    } catch (error) {
+      if (attempt === maxRetries) {
+        throw new Error(handlePinataError(error));
+      }
+      // Wait before retry (exponential backoff)
+      await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+    }
+  }
+};
+```
+
+#### GraphQL Query Errors
+```javascript
+const handleGraphQLError = (error) => {
+  console.error('GraphQL query error:', error);
+  
+  if (error.networkError) {
+    return 'Network error - please check your connection';
+  } else if (error.graphQLErrors?.length > 0) {
+    return `Query error: ${error.graphQLErrors[0].message}`;
+  } else {
+    return 'Failed to fetch data, please try again';
+  }
+};
+
+// Query with error handling
+const queryWithErrorHandling = async (query, variables) => {
+  try {
+    const { data, error } = await apolloClient.query({
+      query,
+      variables,
+      errorPolicy: 'all'
+    });
+    
+    if (error) {
+      throw error;
+    }
+    
+    return data;
+  } catch (error) {
+    const errorMessage = handleGraphQLError(error);
+    showError(errorMessage);
+    throw error;
   }
 };
 ```
 
 ---
 
-## Testing Guide
+## Implementation Best Practices
 
-### Unit Testing Contract Interactions
+### Smart Contract Integration Guidelines
+
+#### Pre-Transaction Validation
 ```javascript
-describe('Goal Creation', () => {
-  it('should create goal and mint pet', async () => {
-    // Mock contract calls
-    const mockGoalManager = {
-      createGoal: jest.fn().mockResolvedValue({ hash: '0x123' })
-    };
-    
-    // Test goal creation flow
-    const result = await createGoal({
-      title: 'Test Goal',
-      stakeAmount: '100',
-      durationDays: 30,
-      petName: 'Fluffy',
-      petType: 1,
-      totalMilestones: 10
-    });
-    
-    expect(mockGoalManager.createGoal).toHaveBeenCalledWith(
-      'Test Goal',
-      ethers.utils.parseEther('100'),
-      30,
-      'Fluffy',
-      1,
-      expect.any(String), // metadata IPFS hash
-      10
-    );
-  });
-});
+// Always validate contract state before transactions
+const validateBeforeGoalCreation = async (userAddress, stakeAmount) => {
+  // Check PAT balance
+  const balance = await patToken.balanceOf(userAddress);
+  if (balance.lt(ethers.utils.parseEther(stakeAmount))) {
+    throw new Error('Insufficient PAT balance');
+  }
+  
+  // Check allowance
+  const allowance = await patToken.allowance(userAddress, CONTRACTS.PAT_TREASURY_MANAGER);
+  if (allowance.lt(ethers.utils.parseEther(stakeAmount))) {
+    throw new Error('Insufficient token approval');
+  }
+  
+  return true;
+};
+
+// Validate goal state before milestone submission
+const validateMilestoneSubmission = async (goalId, milestoneId) => {
+  const isActive = await patGoalManager.isGoalActive(goalId);
+  const isExpired = await patGoalManager.isGoalExpired(goalId);
+  
+  if (!isActive) throw new Error('Goal is not active');
+  if (isExpired) throw new Error('Goal has expired');
+  
+  return true;
+};
 ```
 
-### Integration Testing with Local Blockchain
+#### Transaction Pattern
 ```javascript
-describe('Goal Flow Integration', () => {
-  let goalManager, petNFT, patToken;
-  
-  beforeEach(async () => {
-    // Deploy contracts to local blockchain
-    // Setup test accounts
-    // Mint test PAT tokens
-  });
-  
-  it('should complete full goal lifecycle', async () => {
-    // 1. Create goal
-    // 2. Create milestones  
-    // 3. Submit evidence
-    // 4. Validate milestones
-    // 5. Check pet evolution
-    // 6. Complete goal
-    // 7. Verify rewards
-  });
-});
+// Standard transaction flow with proper error handling
+const executeTransaction = async (contractMethod, params, description) => {
+  try {
+    // Estimate gas first
+    const gasEstimate = await contractMethod.estimateGas(...params);
+    const gasLimit = gasEstimate.mul(110).div(100); // Add 10% buffer
+    
+    // Execute transaction
+    const tx = await contractMethod(...params, { gasLimit });
+    
+    // Show pending state
+    showTransactionPending(tx.hash, description);
+    
+    // Wait for confirmation
+    const receipt = await tx.wait();
+    
+    // Show success
+    showTransactionSuccess(receipt.transactionHash, description);
+    
+    return receipt;
+  } catch (error) {
+    handleTransactionError(error, description);
+    throw error;
+  }
+};
 ```
 
-### GraphQL Query Testing
+### Data Fetching Strategies
+
+#### Optimized GraphQL Queries
 ```javascript
-describe('Ponder GraphQL Queries', () => {
-  it('should fetch user goals correctly', async () => {
-    const query = `
-      query GetUserGoals($userAddress: String!) {
-        goalCreateds(where: { owner: $userAddress }) {
-          goalId
-          title
-          stakeAmount
-        }
+// Use fragments for reusable query parts
+const PET_DETAILS_FRAGMENT = gql`
+  fragment PetDetails on PetMinted {
+    tokenId
+    owner
+    name
+    petType
+    goalId
+    metadataIPFS
+    timestamp
+  }
+`;
+
+// Combine related data in single queries
+const GET_COMPLETE_GOAL_DATA = gql`
+  query GetCompleteGoalData($goalId: String!, $userAddress: String!) {
+    goalCreateds(where: { goalId: $goalId }) {
+      ...GoalDetails
+    }
+    
+    petMinteds(where: { goalId: $goalId }) {
+      ...PetDetails
+    }
+    
+    milestoneCreateds(where: { goalId: $goalId }) {
+      milestoneId
+      description
+      milestoneIndex
+    }
+    
+    userGoals: goalCreateds(where: { owner: $userAddress }) {
+      goalId
+      title
+      status
+    }
+  }
+`;
+```
+
+#### Cache Management
+```javascript
+// Setup Apollo Client with proper caching
+const apolloClient = new ApolloClient({
+  uri: process.env.REACT_APP_PONDER_API_URL,
+  cache: new InMemoryCache({
+    typePolicies: {
+      GoalCreated: {
+        keyFields: ['goalId']
+      },
+      PetMinted: {
+        keyFields: ['tokenId']
       }
-    `;
-    
-    const result = await apolloClient.query({
-      query: gql(query),
-      variables: { userAddress: '0x123...' }
-    });
-    
-    expect(result.data.goalCreateds).toHaveLength(1);
-    expect(result.data.goalCreateds[0].title).toBe('Test Goal');
-  });
+    }
+  }),
+  defaultOptions: {
+    watchQuery: {
+      errorPolicy: 'all',
+      fetchPolicy: 'cache-and-network'
+    }
+  }
 });
 ```
+
+### Performance Optimization
+
+#### Batch Operations
+```javascript
+// Batch multiple operations when possible
+const createGoalWithMilestones = async (goalData, milestones) => {
+  // 1. Create goal first
+  const goalTx = await patGoalManager.createGoal(...goalParams);
+  const goalReceipt = await goalTx.wait();
+  const goalId = goalReceipt.events.find(e => e.event === 'GoalCreated').args.goalId;
+  
+  // 2. Batch milestone creation
+  const milestonePromises = milestones.map(milestone => 
+    patGoalManager.createMilestone(goalId, milestone.description)
+  );
+  
+  await Promise.all(milestonePromises);
+  
+  return goalId;
+};
+```
+
+#### Event Subscription Management
+```javascript
+// Efficiently manage event subscriptions
+class EventManager {
+  constructor() {
+    this.subscriptions = new Map();
+  }
+  
+  subscribe(contractName, eventName, callback, filter = {}) {
+    const key = `${contractName}-${eventName}`;
+    
+    if (this.subscriptions.has(key)) {
+      this.unsubscribe(key);
+    }
+    
+    const contract = this.getContract(contractName);
+    const subscription = contract.on(eventName, callback);
+    
+    this.subscriptions.set(key, subscription);
+  }
+  
+  unsubscribe(key) {
+    const subscription = this.subscriptions.get(key);
+    if (subscription) {
+      subscription.removeAllListeners();
+      this.subscriptions.delete(key);
+    }
+  }
+  
+  cleanup() {
+    this.subscriptions.forEach((_, key) => this.unsubscribe(key));
+  }
+}
 
 ---
 
@@ -672,35 +1192,67 @@ describe('Ponder GraphQL Queries', () => {
 
 | Feature | Contract | Function | Parameters |
 |---------|----------|----------|------------|
-| Create Goal | GoalManager | `createGoal()` | title, stakeAmount, durationDays, petName, petType, petMetadataIPFS, totalMilestones |
-| Create Milestone | GoalManager | `createMilestone()` | goalId, description |
-| Submit Evidence | GoalManager | `submitMilestone()` | milestoneId, evidenceIPFS |
+| Create Goal | PatGoalManager | `createGoal()` | title, stakeAmount, durationDays, petName, petType, petMetadataIPFS, totalMilestones |
+| Create Milestone | PatGoalManager | `createMilestone()` | goalId, description |
+| Submit Evidence | PatGoalManager | `submitMilestone()` | milestoneId, evidenceIPFS |
 | Approve Tokens | PATToken | `approve()` | spender, amount |
+| Register Validator | PatValidationSystem | `registerValidator()` | stakeAmount |
+| Submit Validation | PatValidationSystem | `submitValidation()` | milestoneId, approve, comment |
+| Force Complete Milestone | PatGoalManager | `completeMilestone()` | milestoneId, newPetMetadataIPFS |
+| Add Bonus XP | PatGoalManager | `addBonusXP()` | goalId, xpAmount, reason, newPetMetadataIPFS |
 
-### Evolution Thresholds
+### Pet Evolution Thresholds
 - **EGG → BABY**: 100 XP (4 milestones)
-- **BABY → ADULT**: 500 XP (20 milestones)
+- **BABY → ADULT**: 500 XP (20 milestones)  
 - **Milestone XP**: 25 XP per milestone
 - **Completion Bonus**: 100 XP per goal
 
-### Pet Types
-- **0**: DRAGON
-- **1**: CAT  
-- **2**: PLANT
+### Pet Types (Enum Values)
+- **0**: DRAGON 🐉
+- **1**: CAT 🐱
+- **2**: PLANT 🌱
 
-### Goal Status
-- **0**: ACTIVE
-- **1**: COMPLETED
-- **2**: FAILED
+### Evolution Stages (Enum Values)
+- **0**: EGG 🥚
+- **1**: BABY 👶
+- **2**: ADULT 🦸
+
+### Goal Status (Enum Values)
+- **0**: ACTIVE ⚡
+- **1**: COMPLETED ✅
+- **2**: FAILED ❌
+
+### Validation Status (Enum Values)
+- **0**: PENDING ⏳
+- **1**: APPROVED ✅
+- **2**: REJECTED ❌
+- **3**: DISPUTED ⚠️
+
+### Stake Tiers
+| Tier | Range (PAT) | Multiplier | Name |
+|------|-------------|------------|------|
+| 0 | 10-99 | 110% | Sprout |
+| 1 | 100-499 | 125% | Bloom |
+| 2 | 500-1,999 | 150% | Flourish |
+| 3 | 2,000-9,999 | 200% | Thrive |
+| 4 | 10,000+ | 300% | Legend |
 
 ---
 
 ## Support
 
 For technical questions or issues:
-1. Check contract events in Ponder for debugging
-2. Verify Pinata uploads are successful
+1. Check contract events in Ponder for debugging information
+2. Verify Pinata uploads are successful before contract interactions
 3. Ensure proper token approvals before transactions
 4. Test on local blockchain before mainnet deployment
+5. Monitor gas fees and set appropriate limits
 
-Remember: Always use Ponder GraphQL queries for reading data instead of contract calls for better performance and user experience!
+### Common Debugging Steps
+1. **Transaction Fails**: Check user's PAT balance and approvals
+2. **Pet Not Evolving**: Verify XP thresholds and metadata updates
+3. **Validation Stuck**: Check if enough validators are registered and active
+4. **Metadata Issues**: Validate IPFS hashes and Pinata connectivity
+5. **GraphQL Errors**: Confirm Ponder indexer is running and synced
+
+**Remember**: Always use Ponder GraphQL queries for reading data instead of contract calls for better performance and user experience!

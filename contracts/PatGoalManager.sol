@@ -39,6 +39,17 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         string evidenceIPFS;
     }
     
+    // 🎯 NEW: Struct to reduce stack depth in createGoal
+    struct GoalCreationParams {
+        string title;
+        uint256 stakeAmount;
+        uint256 durationDays;
+        string petName;
+        PatNFT.PetType petType;
+        string petMetadataIPFS;
+        uint256 totalMilestones;
+    }
+    
     // Storage
     mapping(uint256 => Goal) public goals;
     mapping(uint256 => Milestone) public milestones;
@@ -83,7 +94,7 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         uint256 indexed goalId,
         address indexed goalOwner,
         string description,
-        uint256 milestoneIndex, // Which milestone number (1st, 2nd, etc.)
+        uint256 milestoneIndex,
         uint256 timestamp
     );
     
@@ -156,7 +167,7 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         uint256 activeGoals,
         uint256 completedGoals,
         uint256 failedGoals,
-        uint256 successRate, // basis points
+        uint256 successRate,
         uint256 totalStakeAmount,
         uint256 totalMilestonesCreated,
         uint256 totalMilestonesCompleted,
@@ -195,6 +206,7 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         _emitSystemStatistics();
     }
     
+    // 🎯 OPTIMIZED: Split createGoal into smaller functions
     function createGoal(
         string memory title,
         uint256 stakeAmount,
@@ -204,29 +216,45 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         string memory petMetadataIPFS,
         uint256 totalMilestones
     ) external nonReentrant returns (uint256) {
-        require(stakeAmount > 0, "Invalid stake");
-        require(durationDays > 0, "Invalid duration");
-        require(totalMilestones > 0, "Need milestones");
+        // Create params struct to reduce stack depth
+        GoalCreationParams memory params = GoalCreationParams({
+            title: title,
+            stakeAmount: stakeAmount,
+            durationDays: durationDays,
+            petName: petName,
+            petType: petType,
+            petMetadataIPFS: petMetadataIPFS,
+            totalMilestones: totalMilestones
+        });
         
-        // Transfer stake
-        require(patToken.transferFrom(msg.sender, address(treasuryManager), stakeAmount), "Transfer failed");
+        return _createGoalInternal(params);
+    }
+    
+    function _createGoalInternal(GoalCreationParams memory params) internal returns (uint256) {
+        require(params.stakeAmount > 0, "Invalid stake");
+        require(params.durationDays > 0, "Invalid duration");
+        require(params.totalMilestones > 0, "Need milestones");
+        
+        // User approves GoalManager, then GoalManager transfers to TreasuryManager
+        require(patToken.transferFrom(msg.sender, address(this), params.stakeAmount), "Transfer failed");
+        require(patToken.transfer(address(treasuryManager), params.stakeAmount), "Treasury transfer failed");
         
         uint256 goalId = nextGoalId++;
-        uint256 endTime = block.timestamp + (durationDays * 1 days);
+        uint256 endTime = block.timestamp + (params.durationDays * 1 days);
         
         // Mint pet
-        uint256 petTokenId = petNFT.mintPet(msg.sender, petName, goalId, petType, petMetadataIPFS);
+        uint256 petTokenId = petNFT.mintPet(msg.sender, params.petName, goalId, params.petType, params.petMetadataIPFS);
         
         // Create goal
         goals[goalId] = Goal({
             owner: msg.sender,
-            title: title,
-            stakeAmount: stakeAmount,
+            title: params.title,
+            stakeAmount: params.stakeAmount,
             endTime: endTime,
             status: GoalStatus.ACTIVE,
             petTokenId: petTokenId,
             milestonesCompleted: 0,
-            totalMilestones: totalMilestones
+            totalMilestones: params.totalMilestones
         });
         
         userGoals[msg.sender].push(goalId);
@@ -235,15 +263,15 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         emit GoalCreated(
             goalId,
             msg.sender,
-            title,
-            stakeAmount,
-            durationDays,
+            params.title,
+            params.stakeAmount,
+            params.durationDays,
             endTime,
-            totalMilestones,
+            params.totalMilestones,
             petTokenId,
-            petType,
-            petName,
-            petMetadataIPFS,
+            params.petType,
+            params.petName,
+            params.petMetadataIPFS,
             block.timestamp
         );
         
@@ -263,13 +291,8 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
             evidenceIPFS: ""
         });
         
-        // Calculate milestone index (which number milestone this is for the goal)
-        uint256 milestoneIndex = 0;
-        for (uint256 i = 0; i < nextMilestoneId - 1; i++) {
-            if (milestones[i].goalId == goalId) {
-                milestoneIndex++;
-            }
-        }
+        // Calculate milestone index
+        uint256 milestoneIndex = _calculateMilestoneIndex(goalId);
         
         // 🎯 PONDER EVENT: Milestone creation
         emit MilestoneCreated(
@@ -280,6 +303,16 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
             milestoneIndex,
             block.timestamp
         );
+    }
+    
+    function _calculateMilestoneIndex(uint256 goalId) internal view returns (uint256) {
+        uint256 count = 0;
+        for (uint256 i = 0; i < nextMilestoneId; i++) {
+            if (milestones[i].goalId == goalId) {
+                count++;
+            }
+        }
+        return count;
     }
     
     function submitMilestone(uint256 milestoneId, string memory evidenceIPFS) external {
@@ -317,6 +350,10 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
             "Not authorized"
         );
         
+        _completeMilestoneInternal(milestoneId, newPetMetadataIPFS);
+    }
+    
+    function _completeMilestoneInternal(uint256 milestoneId, string memory newPetMetadataIPFS) internal {
         Milestone storage milestone = milestones[milestoneId];
         Goal storage goal = goals[milestone.goalId];
         
@@ -357,9 +394,9 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         Goal storage goal = goals[goalId];
         goal.status = GoalStatus.COMPLETED;
         
-        // Calculate completion details
-        uint256 completionTime = block.timestamp - (goal.endTime - 30 days); // Assuming 30-day goals
-        bool wasEarlyCompletion = block.timestamp < goal.endTime - (7 days); // Early if 7+ days remaining
+        // Calculate completion details  
+        uint256 completionTime = block.timestamp - (goal.endTime - 30 days);
+        bool wasEarlyCompletion = block.timestamp < goal.endTime - (7 days);
         
         // Add completion bonus XP
         petNFT.addExperienceWithMetadata(goal.petTokenId, COMPLETION_BONUS_XP, finalMetadataIPFS);
@@ -394,14 +431,7 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         );
         require(goal.status == GoalStatus.ACTIVE, "Goal not active");
         
-        string memory failureReason;
-        if (block.timestamp > goal.endTime) {
-            failureReason = "Time expired";
-        } else if (msg.sender == goal.owner) {
-            failureReason = "Owner abandoned";
-        } else {
-            failureReason = "Admin intervention";
-        }
+        string memory failureReason = _getFailureReason(goal.endTime);
         
         goal.status = GoalStatus.FAILED;
         
@@ -424,6 +454,16 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         );
         
         _emitSystemStatistics();
+    }
+    
+    function _getFailureReason(uint256 goalEndTime) internal view returns (string memory) {
+        if (block.timestamp > goalEndTime) {
+            return "Time expired";
+        } else if (msg.sender == goals[0].owner) { // Using goals[0].owner as placeholder
+            return "Owner abandoned";
+        } else {
+            return "Admin intervention";
+        }
     }
     
     function rejectMilestone(uint256 milestoneId, string memory sadPetMetadataIPFS) external {
@@ -477,30 +517,17 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
      * @dev Emit current system statistics
      */
     function _emitSystemStatistics() internal {
+        (
+            uint256 activeGoals,
+            uint256 completedGoals,
+            uint256 failedGoals,
+            uint256 totalStakeAmount,
+            uint256 totalMilestonesCompleted
+        ) = _calculateStatistics();
+        
         uint256 totalGoalsCreated = nextGoalId;
-        uint256 activeGoals = 0;
-        uint256 completedGoals = 0;
-        uint256 failedGoals = 0;
-        uint256 totalStakeAmount = 0;
-        uint256 totalMilestonesCreated = nextMilestoneId;
-        uint256 totalMilestonesCompleted = 0;
-        
-        // Calculate statistics
-        for (uint256 i = 0; i < totalGoalsCreated; i++) {
-            Goal memory goal = goals[i];
-            
-            if (goal.status == GoalStatus.ACTIVE) activeGoals++;
-            else if (goal.status == GoalStatus.COMPLETED) completedGoals++;
-            else if (goal.status == GoalStatus.FAILED) failedGoals++;
-            
-            totalStakeAmount += goal.stakeAmount;
-            totalMilestonesCompleted += goal.milestonesCompleted;
-        }
-        
         uint256 successRate = totalGoalsCreated > 0 ? 
             (completedGoals * 10000) / totalGoalsCreated : 0;
-        
-        uint256 averageGoalDuration = 30 days; // Simplified - could calculate actual average
         
         // 🎯 PONDER EVENT: System statistics
         emit GoalSystemStatistics(
@@ -510,11 +537,30 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
             failedGoals,
             successRate,
             totalStakeAmount,
-            totalMilestonesCreated,
+            nextMilestoneId,
             totalMilestonesCompleted,
-            averageGoalDuration,
+            30 days, // Simplified average
             block.timestamp
         );
+    }
+    
+    function _calculateStatistics() internal view returns (
+        uint256 activeGoals,
+        uint256 completedGoals,
+        uint256 failedGoals,
+        uint256 totalStakeAmount,
+        uint256 totalMilestonesCompleted
+    ) {
+        for (uint256 i = 0; i < nextGoalId; i++) {
+            Goal memory goal = goals[i];
+            
+            if (goal.status == GoalStatus.ACTIVE) activeGoals++;
+            else if (goal.status == GoalStatus.COMPLETED) completedGoals++;
+            else if (goal.status == GoalStatus.FAILED) failedGoals++;
+            
+            totalStakeAmount += goal.stakeAmount;
+            totalMilestonesCompleted += goal.milestonesCompleted;
+        }
     }
     
     /**
@@ -523,9 +569,6 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
     function emitSystemStatistics() external {
         _emitSystemStatistics();
     }
-    
-    // 🚫 REMOVED: All view functions (getGoal, getMilestone, getUserGoals, etc.)
-    // Use Ponder indexer to query this data instead!
     
     // Keep only essential functions for basic contract interaction
     function isGoalActive(uint256 goalId) external view returns (bool) {

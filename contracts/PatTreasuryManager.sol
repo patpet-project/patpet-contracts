@@ -105,8 +105,10 @@ contract PatTreasuryManager is Ownable, ReentrancyGuard {
         validatorPool += validatorAmount;
         developmentPool += developmentAmount;
         
-        // Burn tokens for deflationary pressure
-        patToken.burnFrom(address(this), burnAmount);
+        // 🔧 FIX: Send tokens to dead address instead of burning (simpler approach)
+        // Burn tokens for deflationary pressure by sending to 0x000...dead
+        address deadAddress = 0x000000000000000000000000000000000000dEaD;
+        patToken.transfer(deadAddress, burnAmount);
         totalTokensBurned += burnAmount;
         
         // Update statistics

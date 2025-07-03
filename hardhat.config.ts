@@ -17,7 +17,7 @@ const config: HardhatUserConfig = {
         enabled: true,
         runs: 200
       },
-      viaIR: true // Enable via IR compilation
+      // viaIR: true // Enable via IR compilation
 
     }
   },
