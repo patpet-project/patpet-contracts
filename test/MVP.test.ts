@@ -298,6 +298,7 @@ describe("Pet Pat MVP - Simple Test", function () {
     } = await loadFixture(deployFixture);
 
     // Test: Creating goal without approval should fail
+    // The actual error will be from the ERC20 token, not our custom error
     await expect(
       goalManager.connect(user1).createGoal(
         "No Approval Goal",
@@ -333,7 +334,7 @@ describe("Pet Pat MVP - Simple Test", function () {
     // Test: Non-owner trying to create milestone should fail
     await expect(
       goalManager.connect(user2).createMilestone(goalId, "Unauthorized milestone")
-    ).to.be.revertedWith("Not goal owner");
+    ).to.be.revertedWithCustomError(goalManager, "NotGoalOwner");
 
     console.log("✅ Correctly rejected unauthorized milestone creation");
 
@@ -350,9 +351,39 @@ describe("Pet Pat MVP - Simple Test", function () {
         "QmInvalidMetadata",
         1
       )
-    ).to.be.revertedWith("Invalid stake");
+    ).to.be.revertedWithCustomError(goalManager, "InvalidStake");
 
     console.log("✅ Correctly rejected invalid goal parameters");
+    
+    // Test: Invalid duration should fail
+    await expect(
+      goalManager.connect(user1).createGoal(
+        "Zero Duration Goal",
+        ethers.parseEther("50"),
+        0, // Zero duration should fail
+        "Invalid Pet",
+        1,
+        "QmInvalidMetadata",
+        1
+      )
+    ).to.be.revertedWithCustomError(goalManager, "InvalidDuration");
+
+    console.log("✅ Correctly rejected invalid duration");
+    
+    // Test: Zero milestones should fail
+    await expect(
+      goalManager.connect(user1).createGoal(
+        "Zero Milestones Goal",
+        ethers.parseEther("50"),
+        30,
+        "Invalid Pet",
+        1,
+        "QmInvalidMetadata",
+        0 // Zero milestones should fail
+      )
+    ).to.be.revertedWithCustomError(goalManager, "NeedMilestones");
+
+    console.log("✅ Correctly rejected zero milestones");
     console.log("✅ All error handling working correctly!");
   });
 });
