@@ -17,8 +17,7 @@ const config: HardhatUserConfig = {
         enabled: true,
         runs: 200
       },
-      viaIR: true // Enable via IR compilation
-
+      // viaIR: true // Enable via IR compilation
     }
   },
   sourcify: {
@@ -36,11 +35,20 @@ const config: HardhatUserConfig = {
       url: "https://testnet-rpc.monad.xyz/",
       chainId: 10143,
       accounts: vars.has("PRIVATE_KEY") ? [`0x${vars.get("PRIVATE_KEY")}`] : [],
-      gasPrice: "auto",
+      // gasPrice: 2000000000, // 2 gwei - start higher for congested network
+      // gas: 8000000,
+      // timeout: 120000, // 2 minutes timeout
+      httpHeaders: {},
+      // Add retry logic
+      throwOnTransactionFailures: true,
+      throwOnCallFailures: true,
+      loggingEnabled: true,
     }
   },
   etherscan: {
-    enabled: false,
+    apiKey: {
+      sepolia: vars.get("ETHERSCAN_API_KEY"),
+    },
   },
 };
 

@@ -1,50 +1,116 @@
 import { buildModule } from "@nomicfoundation/hardhat-ignition/modules";
-import { parseEther } from "ethers";
 
-const PetPatDeploymentModule = buildModule("PetPatDeployment", (m) => {
-  // Step 1: Deploy PAT Token
-  console.log("🪙 Deploying PAT Token...");
-  const patToken = m.contract("PATToken", []);
+const PatPetModule = buildModule("PetPatModule", (m) => {
+  // =============================================================================
+  // 🎯 PET PAT DEPLOYMENT MODULE
+  // =============================================================================
+  
+  console.log("🚀 Starting Pet Pat deployment...");
 
-  // Step 2: Deploy Treasury Manager
-  console.log("🏦 Deploying Treasury Manager...");
-  const treasuryManager = m.contract("TreasuryManager", [patToken]);
+  // =============================================================================
+  // STEP 1: DEPLOY CORE TOKEN
+  // =============================================================================
+  console.log("📝 Step 1: Deploying PATToken...");
+  
+  const patToken = m.contract("PATToken", [], {
+    id: "PATToken",
+  });
 
-  // Step 3: Deploy Validation System
-  console.log("✅ Deploying Validation System...");
-  const validationSystem = m.contract("ValidationSystem", [patToken, treasuryManager]);
+  // =============================================================================
+  // STEP 2: DEPLOY TREASURY MANAGER
+  // =============================================================================
+  console.log("💰 Step 2: Deploying PatTreasuryManager...");
+  
+  const treasuryManager = m.contract("PatTreasuryManager", [patToken], {
+    id: "PatTreasuryManager",
+  });
 
-  // Step 4: Deploy Pet NFT
-  console.log("🐱 Deploying Pet NFT...");
-  const petNFT = m.contract("PetNFT", []);
+  // =============================================================================
+  // STEP 3: DEPLOY VALIDATION SYSTEM
+  // =============================================================================
+  console.log("✅ Step 3: Deploying PatValidationSystem...");
+  
+  const validationSystem = m.contract("PatValidationSystem", [
+    patToken,
+    treasuryManager,
+  ], {
+    id: "PatValidationSystem",
+  });
 
-  // Step 5: Deploy Simple Goal Manager
-  console.log("🎯 Deploying Goal Manager...");
-  const goalManager = m.contract("SimpleGoalManager", [
+  // =============================================================================
+  // STEP 4: DEPLOY PET NFT
+  // =============================================================================
+  console.log("🐱 Step 4: Deploying PatNFT...");
+  
+  const petNFT = m.contract("PatNFT", [], {
+    id: "PatNFT",
+  });
+
+  // =============================================================================
+  // STEP 5: DEPLOY GOAL MANAGER
+  // =============================================================================
+  console.log("🎯 Step 5: Deploying PatGoalManager...");
+  
+  const goalManager = m.contract("PatGoalManager", [
     patToken,
     treasuryManager,
     validationSystem,
     petNFT,
-  ]);
+  ], {
+    id: "PatGoalManager",
+  });
 
-  // Step 6: Setup authorizations
-  console.log("🔐 Setting up contract authorizations...");
+  // =============================================================================
+  // STEP 6: CONFIGURE TOKEN AUTHORIZATIONS
+  // =============================================================================
+  console.log("🔐 Step 6: Setting up token authorizations...");
+  
+  // Add TreasuryManager as authorized minter
+  m.call(patToken, "addAuthorizedMinter", [treasuryManager], {
+    id: "AddTreasuryMinter",
+  });
 
-  // Authorize Treasury Manager to mint/burn PAT tokens
-  m.call(patToken, "addAuthorizedMinter", [treasuryManager]);
-  m.call(patToken, "addAuthorizedBurner", [treasuryManager]);
+  // Add TreasuryManager as authorized burner
+  m.call(patToken, "addAuthorizedBurner", [treasuryManager], {
+    id: "AddTreasuryBurner",
+  });
 
-  // Authorize Goal Manager to interact with Treasury
-  m.call(treasuryManager, "addAuthorizedContract", [goalManager]);
+  // =============================================================================
+  // STEP 7: CONFIGURE TREASURY AUTHORIZATIONS
+  // =============================================================================
+  console.log("💎 Step 7: Setting up treasury authorizations...");
+  
+  // Add GoalManager as authorized contract for treasury
+  m.call(treasuryManager, "addAuthorizedContract", [goalManager], {
+    id: "AddGoalManagerToTreasury",
+  });
 
-  // Authorize Goal Manager to interact with Validation System
-  m.call(validationSystem, "addAuthorizedContract", [goalManager]);
+  // =============================================================================
+  // STEP 8: CONFIGURE VALIDATION AUTHORIZATIONS
+  // =============================================================================
+  console.log("🛡️ Step 8: Setting up validation authorizations...");
+  
+  // Add GoalManager as authorized contract for validation
+  m.call(validationSystem, "addAuthorizedContract", [goalManager], {
+    id: "AddGoalManagerToValidation",
+  });
 
-  // Authorize Goal Manager to interact with Pet NFT
-  m.call(petNFT, "setAuthorizedContract", [goalManager, true]);
+  // =============================================================================
+  // STEP 9: CONFIGURE NFT AUTHORIZATIONS
+  // =============================================================================
+  console.log("🎨 Step 9: Setting up NFT authorizations...");
+  
+  // Add GoalManager as authorized contract for NFT
+  m.call(petNFT, "setAuthorizedContract", [goalManager, true], {
+    id: "AddGoalManagerToNFT",
+  });
 
-  console.log("🎉 Pet Pat deployment complete!");
+  // =============================================================================
+  // STEP 10: FINAL CONFIGURATION
+  // =============================================================================
+  console.log("⚙️ Step 10: Final configuration...");
 
+  // Return all deployed contracts for use
   return {
     patToken,
     treasuryManager,
@@ -54,4 +120,4 @@ const PetPatDeploymentModule = buildModule("PetPatDeployment", (m) => {
   };
 });
 
-export default PetPatDeploymentModule;
+export default PatPetModule;

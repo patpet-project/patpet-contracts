@@ -1,0 +1,56 @@
+{
+  "network": "monadTestnet",
+  "timestamp": "2025-07-05T05:05:11.522Z",
+  "contracts": [
+    {
+      "name": "PATToken",
+      "address": "0x9D0eF9a48202f291a8dAA2Ce81b5038D4Ab3A24e",
+      "constructorArgs": [],
+      "verified": false,
+      "explorerUrl": "https://testnet-rpc.monad.xyz/address/0x9D0eF9a48202f291a8dAA2Ce81b5038D4Ab3A24e"
+    },
+    {
+      "name": "PatTreasuryManager",
+      "address": "0xAaD8D222CDAe15fd9c3f51A04A2eA67b9D8C4D35",
+      "constructorArgs": [
+        "0x9D0eF9a48202f291a8dAA2Ce81b5038D4Ab3A24e"
+      ],
+      "verified": false,
+      "explorerUrl": "https://testnet-rpc.monad.xyz/address/0xAaD8D222CDAe15fd9c3f51A04A2eA67b9D8C4D35"
+    },
+    {
+      "name": "PatValidationSystem",
+      "address": "0xA092F79e7D8Cf901DE88363265E0C5B8F9bCCe17",
+      "constructorArgs": [
+        "0x9D0eF9a48202f291a8dAA2Ce81b5038D4Ab3A24e",
+        "0xAaD8D222CDAe15fd9c3f51A04A2eA67b9D8C4D35"
+      ],
+      "verified": false,
+      "explorerUrl": "https://testnet-rpc.monad.xyz/address/0xA092F79e7D8Cf901DE88363265E0C5B8F9bCCe17"
+    },
+    {
+      "name": "PatNFT",
+      "address": "0x68e6B782e0E14840677998bB9fC1b78fd60aa122",
+      "constructorArgs": [],
+      "verified": false,
+      "explorerUrl": "https://testnet-rpc.monad.xyz/address/0x68e6B782e0E14840677998bB9fC1b78fd60aa122"
+    },
+    {
+      "name": "PatGoalManager",
+      "address": "0x214506e0fdBd212a87cb0Eef220EdA8Fd4BC1116",
+      "constructorArgs": [
+        "0x9D0eF9a48202f291a8dAA2Ce81b5038D4Ab3A24e",
+        "0xAaD8D222CDAe15fd9c3f51A04A2eA67b9D8C4D35",
+        "0xA092F79e7D8Cf901DE88363265E0C5B8F9bCCe17",
+        "0x68e6B782e0E14840677998bB9fC1b78fd60aa122"
+      ],
+      "verified": false,
+      "explorerUrl": "https://testnet-rpc.monad.xyz/address/0x214506e0fdBd212a87cb0Eef220EdA8Fd4BC1116"
+    }
+  ],
+  "summary": {
+    "totalContracts": 5,
+    "successfulVerifications": 0,
+    "allVerified": false
+  }
+}

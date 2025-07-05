@@ -1,0 +1,48 @@
+{
+  "network": "monadTestnet",
+  "timestamp": "2025-07-05T05:19:10.094Z",
+  "verificationType": "sourcify",
+  "sourcifyUrl": "https://testnet.monadexplorer.com",
+  "contracts": [
+    {
+      "name": "PATToken",
+      "address": "0x9D0eF9a48202f291a8dAA2Ce81b5038D4Ab3A24e",
+      "verified": true,
+      "explorerUrl": "https://testnet.monadexplorer.com/address/0x9D0eF9a48202f291a8dAA2Ce81b5038D4Ab3A24e",
+      "sourcifyUrl": "https://testnet.monadexplorer.com/address/0x9D0eF9a48202f291a8dAA2Ce81b5038D4Ab3A24e#code"
+    },
+    {
+      "name": "PatTreasuryManager",
+      "address": "0xAaD8D222CDAe15fd9c3f51A04A2eA67b9D8C4D35",
+      "verified": true,
+      "explorerUrl": "https://testnet.monadexplorer.com/address/0xAaD8D222CDAe15fd9c3f51A04A2eA67b9D8C4D35",
+      "sourcifyUrl": "https://testnet.monadexplorer.com/address/0xAaD8D222CDAe15fd9c3f51A04A2eA67b9D8C4D35#code"
+    },
+    {
+      "name": "PatValidationSystem",
+      "address": "0xA092F79e7D8Cf901DE88363265E0C5B8F9bCCe17",
+      "verified": true,
+      "explorerUrl": "https://testnet.monadexplorer.com/address/0xA092F79e7D8Cf901DE88363265E0C5B8F9bCCe17",
+      "sourcifyUrl": "https://testnet.monadexplorer.com/address/0xA092F79e7D8Cf901DE88363265E0C5B8F9bCCe17#code"
+    },
+    {
+      "name": "PatNFT",
+      "address": "0x68e6B782e0E14840677998bB9fC1b78fd60aa122",
+      "verified": true,
+      "explorerUrl": "https://testnet.monadexplorer.com/address/0x68e6B782e0E14840677998bB9fC1b78fd60aa122",
+      "sourcifyUrl": "https://testnet.monadexplorer.com/address/0x68e6B782e0E14840677998bB9fC1b78fd60aa122#code"
+    },
+    {
+      "name": "PatGoalManager",
+      "address": "0x214506e0fdBd212a87cb0Eef220EdA8Fd4BC1116",
+      "verified": true,
+      "explorerUrl": "https://testnet.monadexplorer.com/address/0x214506e0fdBd212a87cb0Eef220EdA8Fd4BC1116",
+      "sourcifyUrl": "https://testnet.monadexplorer.com/address/0x214506e0fdBd212a87cb0Eef220EdA8Fd4BC1116#code"
+    }
+  ],
+  "summary": {
+    "totalContracts": 5,
+    "successfulVerifications": 5,
+    "allVerified": true
+  }
+}
