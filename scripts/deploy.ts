@@ -63,8 +63,8 @@ async function main() {
       try {
         console.log(`📝 Deploying ${contractName} (attempt ${attempt}/${maxRetries})...`);
         
-        const gasConfig = await getGasConfig();
-        const contract = await factory.deploy(...args, gasConfig);
+        // const gasConfig = await getGasConfig();
+        const contract = await factory.deploy(...args);
         await contract.waitForDeployment();
         
         const address = await contract.getAddress();

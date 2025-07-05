@@ -5,8 +5,8 @@ import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
- * @title PatNFT - Gas Optimized Version
- * @dev Dynamic NFT with 25-30% gas savings through struct packing and optimizations
+ * @title PatNFT - Milestone-Based Evolution
+ * @dev Dynamic NFT with evolution based on milestone completion (max 4 milestones)
  */
 contract PatNFT is ERC721, Ownable {
     
@@ -22,7 +22,7 @@ contract PatNFT is ERC721, Ownable {
         uint32 birthTime;                // 4 bytes (valid until year 2106)
         uint32 goalId;                   // 4 bytes (supports 4B goals)
         uint16 level;                    // 2 bytes (supports level 65535)
-        uint16 totalMilestonesCompleted; // 2 bytes (supports 65535 milestones)
+        uint8 milestonesCompleted;       // 1 byte (max 4 milestones)
         PetType petType;                 // 1 byte
         EvolutionStage stage;            // 1 byte
         bytes32 nameHash;                // 32 bytes (separate slot)
@@ -34,10 +34,11 @@ contract PatNFT is ERC721, Ownable {
     mapping(address => uint256[]) public ownerPets;
     mapping(address => bool) public authorizedContracts;
     
-    // 🔧 OPTIMIZATION: Pack constants into single storage slot
-    uint256 private constant PACKED_EVOLUTION_CONSTANTS = 
-        (100 << 128) |  // EGG_TO_BABY_XP = 100
-        (500);          // BABY_TO_ADULT_XP = 500
+    // 🔧 OPTIMIZATION: Evolution thresholds based on milestones
+    uint256 private constant BABY_MILESTONE_THRESHOLD = 2;  // EGG → BABY at 2 milestones
+    uint256 private constant ADULT_MILESTONE_THRESHOLD = 4; // BABY → ADULT at 4 milestones
+    uint256 private constant XP_PER_MILESTONE = 25;         // XP awarded per milestone
+    uint256 private constant COMPLETION_BONUS_XP = 100;     // Bonus XP for goal completion
     
     string public baseTokenURI = "https://gateway.pinata.cloud/ipfs/";
     
@@ -46,6 +47,7 @@ contract PatNFT is ERC721, Ownable {
     error NotAuthorized();
     error InvalidTokenId();
     error ZeroAddress();
+    error MaxMilestonesReached();
     
     // 🔧 OPTIMIZATION: Packed events for better gas efficiency
     event PetMinted(
@@ -58,12 +60,11 @@ contract PatNFT is ERC721, Ownable {
         uint256 timestamp
     );
     
-    event ExperienceGained(
+    event MilestoneCompleted(
         uint256 indexed tokenId,
         uint256 indexed goalId,
         address indexed owner,
-        uint256 packedData, // experienceAmount(64) | newTotalExp(64) | oldLevel(16) | newLevel(16)
-        bytes32 reasonHash,
+        uint256 packedData, // xpAwarded(64) | newMilestones(8) | newLevel(16) | newStage(8)
         bytes32 newMetadataIPFSHash,
         uint256 timestamp
     );
@@ -72,7 +73,17 @@ contract PatNFT is ERC721, Ownable {
         uint256 indexed tokenId,
         uint256 indexed goalId,
         address indexed owner,
-        uint256 packedData, // fromStage(8) | toStage(8) | currentExp(64) | evolutionTime(64)
+        uint256 packedData, // fromStage(8) | toStage(8) | milestones(8) | totalExp(64)
+        bytes32 newMetadataIPFSHash,
+        uint256 timestamp
+    );
+    
+    event ExperienceGained(
+        uint256 indexed tokenId,
+        uint256 indexed goalId,
+        address indexed owner,
+        uint256 packedData, // experienceAmount(64) | newTotalExp(64) | oldLevel(16) | newLevel(16)
+        bytes32 reasonHash,
         bytes32 newMetadataIPFSHash,
         uint256 timestamp
     );
@@ -91,6 +102,7 @@ contract PatNFT is ERC721, Ownable {
         uint256 totalSupply,
         uint256 packedStageData,    // eggStage(16) | babyStage(16) | adultStage(16) | reserved(208)
         uint256 averageExperience,
+        uint256 averageMilestones,
         uint256 timestamp
     );
     
@@ -124,7 +136,7 @@ contract PatNFT is ERC721, Ownable {
             birthTime: uint32(block.timestamp),
             goalId: uint32(goalId),
             level: 1,
-            totalMilestonesCompleted: 0,
+            milestonesCompleted: 0,
             petType: petType,
             stage: EvolutionStage.EGG,
             nameHash: keccak256(bytes(name)),
@@ -154,29 +166,178 @@ contract PatNFT is ERC721, Ownable {
         return tokenId;
     }
     
-    // 🔧 OPTIMIZATION: External with calldata
-    function addExperienceWithMetadata(
+    // 🔧 NEW: Record milestone completion and handle evolution
+    function recordMilestoneCompleted(
         uint256 tokenId, 
-        uint256 amount, 
         string calldata newMetadataIPFS
     ) external onlyAuthorized {
-        _addExperienceWithMetadata(tokenId, amount, newMetadataIPFS);
-        _emitStatisticsSnapshot();
-    }
-    
-    function recordMilestoneCompleted(uint256 tokenId) external onlyAuthorized {
         if (_ownerOf(tokenId) == address(0)) revert PetDoesNotExist();
         
         Pet storage pet = pets[tokenId];
+        
+        // Check if max milestones reached
+        if (pet.milestonesCompleted >= 4) revert MaxMilestonesReached();
+        
+        // Increment milestone count
         unchecked {
-            pet.totalMilestonesCompleted++;
+            pet.milestonesCompleted++;
         }
+        
+        // Award XP for milestone
+        uint256 oldLevel = pet.level;
+        pet.experience += uint96(XP_PER_MILESTONE);
+        pet.level = uint16((pet.experience / 50) + 1);
+        
+        // Check for evolution based on milestones
+        EvolutionStage oldStage = pet.stage;
+        EvolutionStage newStage = _calculateEvolutionFromMilestones(pet.milestonesCompleted);
+        
+        if (newStage != oldStage) {
+            pet.stage = newStage;
+            
+            // Emit evolution event
+            uint256 evolutionPackedData = (uint256(oldStage) << 248) | 
+                                         (uint256(newStage) << 240) | 
+                                         (uint256(pet.milestonesCompleted) << 232) | 
+                                         (uint256(pet.experience) << 168);
+            
+            emit PetEvolved(
+                tokenId,
+                pet.goalId,
+                _ownerOf(tokenId),
+                evolutionPackedData,
+                keccak256(bytes(newMetadataIPFS)),
+                block.timestamp
+            );
+        }
+        
+        // Update metadata
+        pet.metadataIPFSHash = keccak256(bytes(newMetadataIPFS));
+        
+        // 🔧 OPTIMIZATION: Pack milestone completion data
+        uint256 packedData = (uint256(XP_PER_MILESTONE) << 192) | 
+                           (uint256(pet.milestonesCompleted) << 184) | 
+                           (uint256(pet.level) << 168) | 
+                           (uint256(pet.stage) << 160);
         
         emit MilestoneCompleted(
             tokenId,
             pet.goalId,
             _ownerOf(tokenId),
-            pet.totalMilestonesCompleted,
+            packedData,
+            keccak256(bytes(newMetadataIPFS)),
+            block.timestamp
+        );
+        
+        // Emit metadata update
+        emit MetadataUpdated(
+            tokenId,
+            pet.goalId,
+            _ownerOf(tokenId),
+            pet.metadataIPFSHash, // old (will be same as new in this case)
+            keccak256(bytes(newMetadataIPFS)), // new
+            keccak256("Milestone completed"),
+            block.timestamp
+        );
+        
+        _emitStatisticsSnapshot();
+    }
+    
+    // 🔧 NEW: Calculate evolution stage based on milestones completed
+    function _calculateEvolutionFromMilestones(uint256 milestonesCompleted) 
+        internal pure returns (EvolutionStage) {
+        if (milestonesCompleted >= ADULT_MILESTONE_THRESHOLD) {
+            return EvolutionStage.ADULT;
+        } else if (milestonesCompleted >= BABY_MILESTONE_THRESHOLD) {
+            return EvolutionStage.BABY;
+        } else {
+            return EvolutionStage.EGG;
+        }
+    }
+    
+    // 🔧 MODIFIED: Add experience with evolution check (for bonus XP)
+    function addExperienceWithMetadata(
+        uint256 tokenId, 
+        uint256 amount, 
+        string calldata newMetadataIPFS
+    ) external onlyAuthorized {
+        if (_ownerOf(tokenId) == address(0)) revert PetDoesNotExist();
+        
+        Pet storage pet = pets[tokenId];
+        uint256 oldExperience = pet.experience;
+        uint256 oldLevel = pet.level;
+        
+        // 🔧 OPTIMIZATION: Unchecked arithmetic (safe for experience points)
+        unchecked {
+            pet.experience += uint96(amount);
+            pet.level = uint16((pet.experience / 50) + 1);
+        }
+        
+        bytes32 oldMetadataHash = pet.metadataIPFSHash;
+        pet.metadataIPFSHash = keccak256(bytes(newMetadataIPFS));
+        
+        // 🔧 OPTIMIZATION: Pack experience data
+        uint256 packedData = (amount << 192) | 
+                           (pet.experience << 128) | 
+                           (oldLevel << 112) | 
+                           (pet.level << 96);
+        
+        emit ExperienceGained(
+            tokenId,
+            pet.goalId,
+            _ownerOf(tokenId),
+            packedData,
+            keccak256("Bonus experience"),
+            pet.metadataIPFSHash,
+            block.timestamp
+        );
+        
+        // 🔧 OPTIMIZATION: Only emit metadata update if hash changed
+        if (oldMetadataHash != pet.metadataIPFSHash) {
+            emit MetadataUpdated(
+                tokenId,
+                pet.goalId,
+                _ownerOf(tokenId),
+                oldMetadataHash,
+                pet.metadataIPFSHash,
+                keccak256("Experience gained"),
+                block.timestamp
+            );
+        }
+    }
+    
+    // 🔧 NEW: Award completion bonus when goal is completed
+    function awardCompletionBonus(
+        uint256 tokenId,
+        string calldata finalMetadataIPFS
+    ) external onlyAuthorized {
+        if (_ownerOf(tokenId) == address(0)) revert PetDoesNotExist();
+        
+        Pet storage pet = pets[tokenId];
+        uint256 oldLevel = pet.level;
+        
+        // Award completion bonus
+        unchecked {
+            pet.experience += uint96(COMPLETION_BONUS_XP);
+            pet.level = uint16((pet.experience / 50) + 1);
+        }
+        
+        // Update metadata
+        pet.metadataIPFSHash = keccak256(bytes(finalMetadataIPFS));
+        
+        // Pack and emit experience gained event
+        uint256 packedData = (uint256(COMPLETION_BONUS_XP) << 192) | 
+                           (pet.experience << 128) | 
+                           (oldLevel << 112) | 
+                           (pet.level << 96);
+        
+        emit ExperienceGained(
+            tokenId,
+            pet.goalId,
+            _ownerOf(tokenId),
+            packedData,
+            keccak256("Goal completion bonus"),
+            pet.metadataIPFSHash,
             block.timestamp
         );
     }
@@ -206,21 +367,6 @@ contract PatNFT is ERC721, Ownable {
         
         Pet memory pet = pets[tokenId];
         return string(abi.encodePacked(baseTokenURI, _bytes32ToHexString(pet.metadataIPFSHash)));
-    }
-    
-    // 🔧 OPTIMIZATION: Assembly-optimized evolution calculation
-    function _calculateEvolutionStage(uint256 experience, EvolutionStage currentStage) 
-        internal pure returns (EvolutionStage) {
-        // Extract constants from packed storage
-        uint256 babyThreshold = (PACKED_EVOLUTION_CONSTANTS >> 128) & 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF;
-        uint256 adultThreshold = PACKED_EVOLUTION_CONSTANTS & 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF;
-        
-        if (experience >= adultThreshold && currentStage == EvolutionStage.BABY) {
-            return EvolutionStage.ADULT;
-        } else if (experience >= babyThreshold && currentStage == EvolutionStage.EGG) {
-            return EvolutionStage.BABY;
-        }
-        return currentStage;
     }
     
     // 🔧 OPTIMIZATION: External with calldata
@@ -297,6 +443,7 @@ contract PatNFT is ERC721, Ownable {
         uint256 babyStage = 0;
         uint256 adultStage = 0;
         uint256 totalExperience = 0;
+        uint256 totalMilestones = 0;
         
         // 🔧 OPTIMIZATION: Single loop with unchecked arithmetic
         for (uint256 i; i < totalSupplyCount;) {
@@ -312,13 +459,17 @@ contract PatNFT is ERC721, Ownable {
                     unchecked { adultStage++; }
                 }
                 
-                // Sum experience
-                unchecked { totalExperience += pet.experience; }
+                // Sum experience and milestones
+                unchecked { 
+                    totalExperience += pet.experience;
+                    totalMilestones += pet.milestonesCompleted;
+                }
             }
             unchecked { ++i; }
         }
         
         uint256 averageExperience = totalSupplyCount > 0 ? totalExperience / totalSupplyCount : 0;
+        uint256 averageMilestones = totalSupplyCount > 0 ? totalMilestones / totalSupplyCount : 0;
         
         // 🔧 OPTIMIZATION: Pack statistics data
         uint256 packedStageData = (eggStage << 240) | (babyStage << 224) | (adultStage << 208);
@@ -327,6 +478,7 @@ contract PatNFT is ERC721, Ownable {
             totalSupplyCount,
             packedStageData,
             averageExperience,
+            averageMilestones,
             block.timestamp
         );
     }
@@ -356,7 +508,8 @@ contract PatNFT is ERC721, Ownable {
         uint256 level,
         PetType petType,
         EvolutionStage stage,
-        uint256 goalId
+        uint256 goalId,
+        uint256 milestonesCompleted
     ) {
         Pet memory pet = pets[tokenId];
         return (
@@ -365,100 +518,24 @@ contract PatNFT is ERC721, Ownable {
             pet.level,
             pet.petType,
             pet.stage,
-            pet.goalId
-        );
-    }
-    
-    // 🔧 OPTIMIZATION: Batch operations for gas efficiency
-    function batchUpdateExperience(
-        uint256[] calldata tokenIds,
-        uint256[] calldata amounts,
-        string[] calldata metadataIPFS
-    ) external onlyAuthorized {
-        require(tokenIds.length == amounts.length && amounts.length == metadataIPFS.length, "Array length mismatch");
-        
-        uint256 length = tokenIds.length;
-        for (uint256 i; i < length;) {
-            // Direct internal call to avoid external call overhead
-            _addExperienceWithMetadata(tokenIds[i], amounts[i], metadataIPFS[i]);
-            unchecked { ++i; }
-        }
-        
-        // Emit statistics snapshot once after all updates
-        _emitStatisticsSnapshot();
-    }
-    
-    // 🔧 OPTIMIZATION: Internal function for batch operations
-    function _addExperienceWithMetadata(
-        uint256 tokenId, 
-        uint256 amount, 
-        string memory newMetadataIPFS
-    ) internal {
-        if (_ownerOf(tokenId) == address(0)) revert PetDoesNotExist();
-        
-        Pet storage pet = pets[tokenId];
-        uint256 oldExperience = pet.experience;
-        uint256 oldLevel = pet.level;
-        EvolutionStage oldStage = pet.stage;
-        
-        // 🔧 OPTIMIZATION: Unchecked arithmetic (safe for experience points)
-        unchecked {
-            pet.experience += uint96(amount);
-            pet.level = uint16((pet.experience / 50) + 1);
-        }
-        
-        bytes32 oldMetadataHash = pet.metadataIPFSHash;
-        pet.metadataIPFSHash = keccak256(bytes(newMetadataIPFS));
-        
-        // 🔧 OPTIMIZATION: Pack experience data
-        uint256 packedData = (amount << 192) | 
-                           (pet.experience << 128) | 
-                           (oldLevel << 112) | 
-                           (pet.level << 96);
-        
-        emit ExperienceGained(
-            tokenId,
             pet.goalId,
-            _ownerOf(tokenId),
-            packedData,
-            keccak256("Experience reward"),
-            pet.metadataIPFSHash,
-            block.timestamp
+            pet.milestonesCompleted
         );
-        
-        // Check for evolution
-        EvolutionStage newStage = _calculateEvolutionStage(pet.experience, pet.stage);
-        if (newStage != pet.stage) {
-            pet.stage = newStage;
-            
-            // 🔧 OPTIMIZATION: Pack evolution data
-            uint256 evolutionPackedData = (uint256(oldStage) << 248) | 
-                                         (uint256(newStage) << 240) | 
-                                         (pet.experience << 176) | 
-                                         (block.timestamp - pet.birthTime << 112);
-            
-            emit PetEvolved(
-                tokenId,
-                pet.goalId,
-                _ownerOf(tokenId),
-                evolutionPackedData,
-                pet.metadataIPFSHash,
-                block.timestamp
-            );
-        }
-        
-        // 🔧 OPTIMIZATION: Only emit metadata update if hash changed
-        if (oldMetadataHash != pet.metadataIPFSHash) {
-            emit MetadataUpdated(
-                tokenId,
-                pet.goalId,
-                _ownerOf(tokenId),
-                oldMetadataHash,
-                pet.metadataIPFSHash,
-                keccak256("Experience gained"),
-                block.timestamp
-            );
-        }
+    }
+    
+    // 🔧 NEW: Get evolution thresholds
+    function getEvolutionThresholds() external pure returns (
+        uint256 babyMilestoneThreshold,
+        uint256 adultMilestoneThreshold,
+        uint256 xpPerMilestone,
+        uint256 completionBonusXP
+    ) {
+        return (
+            BABY_MILESTONE_THRESHOLD,
+            ADULT_MILESTONE_THRESHOLD,
+            XP_PER_MILESTONE,
+            COMPLETION_BONUS_XP
+        );
     }
     
     // 🔧 OPTIMIZATION: Utility function for converting bytes32 to hex string
@@ -476,14 +553,6 @@ contract PatNFT is ERC721, Ownable {
     }
     
     // Events for compatibility
-    event MilestoneCompleted(
-        uint256 indexed tokenId,
-        uint256 indexed goalId,
-        address indexed owner,
-        uint256 newMilestoneCount,
-        uint256 timestamp
-    );
-    
     event AuthorizationChanged(
         address indexed contractAddress,
         bool authorized,

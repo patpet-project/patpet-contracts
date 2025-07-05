@@ -9,8 +9,8 @@ import "./PatValidationSystem.sol";
 import "./PatNFT.sol";
 
 /**
- * @title PatGoalManager - Gas Optimized Version
- * @dev Ultra-efficient goal management with 30-40% gas savings
+ * @title PatGoalManager - 4 Milestone Limit & Milestone-Based Evolution
+ * @dev Ultra-efficient goal management with maximum 4 milestones per goal
  * @author Pet Pat Team
  */
 contract PatGoalManager is Ownable, ReentrancyGuard {
@@ -21,16 +21,21 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
     PatValidationSystem public immutable validationSystem;
     PatNFT public immutable petNFT;
     
+    // 🔧 CONSTANTS: Maximum milestones per goal
+    uint8 public constant MAX_MILESTONES = 4;
+    
     // 🔧 OPTIMIZATION: Custom errors (cheaper than strings)
     error InvalidStake();
     error InvalidDuration();
     error NeedMilestones();
+    error TooManyMilestones();
     error TransferFailed();
     error TreasuryTransferFailed();
     error NotGoalOwner();
     error GoalNotActive();
     error AlreadyCompleted();
     error NotAuthorized();
+    error MaxMilestonesReached();
     
     enum GoalStatus { ACTIVE, COMPLETED, FAILED }
     
@@ -40,7 +45,7 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         uint96 stakeAmount;         // 12 bytes (can handle up to 79B tokens)
         uint32 endTime;             // 4 bytes (valid until year 2106)
         GoalStatus status;          // 1 byte
-        uint8 totalMilestones;      // 1 byte (0-255 milestones)
+        uint8 totalMilestones;      // 1 byte (max 4 milestones)
         uint8 milestonesCompleted;  // 1 byte
         uint256 petTokenId;         // 32 bytes (separate slot)
         bytes32 titleHash;          // 32 bytes - store hash instead of string
@@ -74,11 +79,6 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
     uint256 public nextGoalId;
     uint256 public nextMilestoneId;
     
-    // 🔧 OPTIMIZATION: Pack constants into single storage slot
-    uint256 private constant PACKED_CONSTANTS = 
-        (25 << 128) |  // MILESTONE_XP = 25
-        (100);         // COMPLETION_BONUS_XP = 100
-    
     // 🔧 OPTIMIZATION: Simplified events with packed data
     event GoalCreated(
         uint256 indexed goalId,
@@ -101,7 +101,7 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         uint256 indexed goalId,
         address indexed owner,
         uint256 packedRewards, // bonusXP(128) | stakeReward(128)
-        uint256 packedData,    // completionTime(128) | wasEarly(1) | reserved(127)
+        uint256 packedData,    // completionTime(128) | wasEarly(1) | allMilestonesCompleted(1)
         bytes32 finalPetMetadataIPFS,
         uint256 timestamp
     );
@@ -152,6 +152,7 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         if (stakeAmount == 0) revert InvalidStake();
         if (durationDays == 0) revert InvalidDuration();
         if (totalMilestones == 0) revert NeedMilestones();
+        if (totalMilestones > MAX_MILESTONES) revert TooManyMilestones();
         
         // 🔧 FIX: Direct creation without intermediate struct to avoid stack depth
         return _createGoalDirect(
@@ -237,6 +238,12 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         uint256 goalId, 
         string calldata description
     ) external onlyGoalOwner(goalId) onlyActiveGoal(goalId) {
+        Goal storage goal = goals[goalId];
+        
+        // Check if we've reached maximum milestones
+        uint256 currentMilestoneCount = _getMilestoneCount(goalId);
+        if (currentMilestoneCount >= goal.totalMilestones) revert MaxMilestonesReached();
+        
         uint256 milestoneId = nextMilestoneId++;
         
         milestones[milestoneId] = Milestone({
@@ -246,7 +253,7 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
             evidenceIPFSHash: bytes32(0)
         });
         
-        // Emit minimal event
+        // Emit milestone created event
         emit MilestoneCreated(milestoneId, goalId, msg.sender, description);
     }
     
@@ -293,21 +300,17 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         
         milestone.isCompleted = true;
         
-        // 🔧 OPTIMIZATION: Unchecked increment (safe since max 255 milestones)
+        // 🔧 OPTIMIZATION: Unchecked increment (safe since max 4 milestones)
         unchecked {
             goal.milestonesCompleted++;
         }
         
-        // 🔧 OPTIMIZATION: Extract constants from packed storage
-        uint256 milestoneXP = (PACKED_CONSTANTS >> 128) & 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF;
-        
-        // Add XP to pet
-        petNFT.addExperienceWithMetadata(goal.petTokenId, milestoneXP, newPetMetadataIPFS);
-        petNFT.recordMilestoneCompleted(goal.petTokenId);
+        // Record milestone completion on pet (this handles XP and evolution)
+        petNFT.recordMilestoneCompleted(goal.petTokenId, newPetMetadataIPFS);
         
         // 🔧 OPTIMIZATION: Pack data in event
         uint256 progressPercentage = (uint256(goal.milestonesCompleted) * 100) / uint256(goal.totalMilestones);
-        uint256 packedData = (milestoneXP << 240) | 
+        uint256 packedData = (25 << 240) |  // XP awarded (25 per milestone)
                            (uint256(goal.milestonesCompleted) << 224) | 
                            (uint256(goal.totalMilestones) << 208) | 
                            (progressPercentage << 192);
@@ -321,7 +324,7 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
             block.timestamp
         );
         
-        // Check if goal is complete
+        // Check if goal is complete (all milestones completed)
         if (goal.milestonesCompleted >= goal.totalMilestones) {
             _completeGoal(milestone.goalId, newPetMetadataIPFS);
         }
@@ -331,22 +334,22 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         Goal storage goal = goals[goalId];
         goal.status = GoalStatus.COMPLETED;
         
-        // 🔧 OPTIMIZATION: Extract constants
-        uint256 completionBonusXP = PACKED_CONSTANTS & 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF;
+        // Award completion bonus to pet
+        petNFT.awardCompletionBonus(goal.petTokenId, finalMetadataIPFS);
         
         // Calculate completion details
         uint256 completionTime = block.timestamp - (uint256(goal.endTime) - 30 days);
         bool wasEarlyCompletion = block.timestamp < uint256(goal.endTime) - 7 days;
-        
-        // Add completion bonus XP
-        petNFT.addExperienceWithMetadata(goal.petTokenId, completionBonusXP, finalMetadataIPFS);
+        bool allMilestonesCompleted = goal.milestonesCompleted >= goal.totalMilestones;
         
         // Return stake with rewards
         uint256 stakeReward = treasuryManager.distributeGoalReward(goal.owner, goal.stakeAmount);
         
         // 🔧 OPTIMIZATION: Pack reward data
-        uint256 packedRewards = (completionBonusXP << 128) | stakeReward;
-        uint256 packedData = (completionTime << 128) | (wasEarlyCompletion ? 1 : 0);
+        uint256 packedRewards = (100 << 128) | stakeReward; // 100 completion bonus XP
+        uint256 packedData = (completionTime << 130) | 
+                           (wasEarlyCompletion ? 2 : 0) | 
+                           (allMilestonesCompleted ? 1 : 0);
         
         emit GoalCompleted(
             goalId,
@@ -370,9 +373,6 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         if (goal.status != GoalStatus.ACTIVE) revert GoalNotActive();
         
         goal.status = GoalStatus.FAILED;
-        
-        // 🔧 REMOVED: No mood setting - just update metadata
-        // petNFT.setPetMoodWithMetadata(goal.petTokenId, false, sadPetMetadataIPFS);
         
         // Distribute failed stake
         treasuryManager.distributeFailedStake(goal.stakeAmount, goal.owner);
@@ -422,7 +422,22 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         return userGoalCount[user];
     }
     
-    // 🔧 OPTIMIZATION: Batch operations for efficiency - simplified to avoid stack depth
+    // 🔧 NEW: Get milestone count for a goal
+    function _getMilestoneCount(uint256 goalId) internal view returns (uint256) {
+        uint256 count = 0;
+        for (uint256 i = 0; i < nextMilestoneId; i++) {
+            if (milestones[i].goalId == goalId) {
+                count++;
+            }
+        }
+        return count;
+    }
+    
+    function getMilestoneCount(uint256 goalId) external view returns (uint256) {
+        return _getMilestoneCount(goalId);
+    }
+    
+    // 🔧 OPTIMIZATION: Batch operations for efficiency - with milestone limit
     function createGoalWithMilestones(
         string calldata title,
         uint96 stakeAmount,
@@ -437,6 +452,7 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         if (stakeAmount == 0) revert InvalidStake();
         if (durationDays == 0) revert InvalidDuration();
         if (totalMilestones == 0) revert NeedMilestones();
+        if (totalMilestones > MAX_MILESTONES) revert TooManyMilestones();
         
         // Create goal using the same direct method
         uint256 goalId = _createGoalDirect(
@@ -457,6 +473,10 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
     
     function _createMilestonesBatch(uint256 goalId, string[] calldata descriptions) internal {
         uint256 length = descriptions.length;
+        
+        // Ensure we don't exceed maximum milestones
+        if (length > MAX_MILESTONES) revert TooManyMilestones();
+        
         for (uint256 i; i < length;) {
             uint256 milestoneId = nextMilestoneId++;
             
@@ -498,13 +518,39 @@ contract PatGoalManager is Ownable, ReentrancyGuard {
         uint256 totalGoals,
         uint256 totalMilestones,
         uint256 nextGoalIdValue,
-        uint256 nextMilestoneIdValue
+        uint256 nextMilestoneIdValue,
+        uint256 maxMilestonesPerGoal
     ) {
         return (
             nextGoalId,
             nextMilestoneId,
             nextGoalId,
-            nextMilestoneId
+            nextMilestoneId,
+            MAX_MILESTONES
+        );
+    }
+    
+    // 🔧 NEW: Get evolution info for frontend
+    function getEvolutionInfo() external view returns (
+        uint256 babyMilestoneThreshold,
+        uint256 adultMilestoneThreshold,
+        uint256 maxMilestones,
+        uint256 xpPerMilestone,
+        uint256 completionBonusXP
+    ) {
+        (
+            uint256 babyThreshold,
+            uint256 adultThreshold,
+            uint256 milestoneXP,
+            uint256 bonusXP
+        ) = petNFT.getEvolutionThresholds();
+        
+        return (
+            babyThreshold,      // 2 milestones for BABY
+            adultThreshold,     // 4 milestones for ADULT
+            MAX_MILESTONES,     // 4 max milestones
+            milestoneXP,        // 25 XP per milestone
+            bonusXP             // 100 XP completion bonus
         );
     }
     
