@@ -45,16 +45,26 @@ Evidence Upload → submitMilestone() → Validation Request → Dashboard Shows
 
 ### 3. ✅ Validation & Evolution Flow
 ```
-Validator Decision → completeMilestone() → Pet Evolution → Celebration
+Evidence Submitted → Validators Assigned → Validation → completeMilestone() → Pet Evolution → Treasury Rewards
 ```
 
 **Steps:**
-1. Validators approve/reject milestone
-2. Approved milestones trigger `completeMilestone()`
-3. Pet evolves at checkpoints:
-   - **2 milestones** → EGG → BABY 🐣
-   - **4 milestones** → BABY → ADULT 🦸 (Goal Complete!)
-4. Show evolution animation + rewards
+1. System assigns 3-7 validators based on goal stake amount
+2. Validators review evidence and vote approve/reject with comments
+3. Majority decision determines milestone outcome
+4. Approved milestones trigger pet evolution and XP rewards
+5. Goal completion triggers treasury rewards distribution
+
+### 4. 💰 Treasury & Rewards Flow
+```
+Goal Complete → Calculate Tier Rewards → Return Stake + Bonus → Distribute Treasury Pools
+```
+
+**Steps:**
+1. Calculate user's stake tier multiplier (110%-300% based on amount)
+2. Return original stake + bonus rewards from treasury
+3. Award completion XP bonus to pet (100 XP)
+4. Update user's success rate and reputation
 
 ---
 
@@ -121,7 +131,94 @@ const handleSubmitMilestone = async (milestoneId, evidenceFile) => {
 };
 ```
 
-#### 3. Key Read Functions
+#### 4. Validator Registration & Validation
+```javascript
+// Register as validator (requires 50+ PAT stake)
+const { writeContract: registerValidator } = useWriteContract();
+
+const handleRegisterValidator = async (stakeAmount) => {
+  await registerValidator({
+    address: CONTRACTS.PAT_VALIDATION_SYSTEM,
+    abi: PAT_VALIDATION_SYSTEM_ABI,
+    functionName: 'registerValidator',
+    args: [parseEther(stakeAmount)] // Minimum 50 PAT
+  });
+};
+
+// Submit validation decision
+const { writeContract: submitValidation } = useWriteContract();
+
+const handleValidation = async (milestoneId, approved, comment) => {
+  await submitValidation({
+    address: CONTRACTS.PAT_VALIDATION_SYSTEM,
+    abi: PAT_VALIDATION_SYSTEM_ABI,
+    functionName: 'submitValidation',
+    args: [milestoneId, approved, comment]
+  });
+};
+
+// Complete milestone (admin/system call after validation)
+const { writeContract: completeMilestone } = useWriteContract();
+
+const handleCompleteMilestone = async (milestoneId, newPetMetadata) => {
+  await completeMilestone({
+    address: CONTRACTS.PAT_GOAL_MANAGER,
+    abi: PAT_GOAL_MANAGER_ABI,
+    functionName: 'completeMilestone',
+    args: [milestoneId, newPetMetadata]
+  });
+};
+```
+
+#### 6. Key Read Functions
+```javascript
+// Get goal info
+const { data: goalInfo } = useReadContract({
+  address: CONTRACTS.PAT_GOAL_MANAGER,
+  abi: PAT_GOAL_MANAGER_ABI,
+  functionName: 'getGoalFullInfo',
+  args: [goalId]
+});
+
+// Get pet info  
+const { data: petInfo } = useReadContract({
+  address: CONTRACTS.PAT_NFT,
+  abi: PAT_NFT_ABI,
+  functionName: 'getPetFullInfo',
+  args: [tokenId]
+});
+
+// Get evolution thresholds
+const { data: evolution } = useReadContract({
+  address: CONTRACTS.PAT_NFT,
+  abi: PAT_NFT_ABI,
+  functionName: 'getEvolutionThresholds'
+});
+// Returns: [2, 4, 25, 100] = [babyThreshold, adultThreshold, xpPerMilestone, bonusXP]
+```
+```javascript
+// Get stake tier information
+const { data: stakeTiers } = useReadContract({
+  address: CONTRACTS.PAT_TREASURY_MANAGER,
+  abi: PAT_TREASURY_MANAGER_ABI,
+  functionName: 'getAllStakeTiers'
+});
+
+// Calculate potential rewards
+const { data: rewardCalculation } = useReadContract({
+  address: CONTRACTS.PAT_TREASURY_MANAGER,
+  abi: PAT_TREASURY_MANAGER_ABI,
+  functionName: 'calculateReward',
+  args: [parseEther(stakeAmount)]
+});
+
+// Get treasury statistics
+const { data: treasuryStats } = useReadContract({
+  address: CONTRACTS.PAT_TREASURY_MANAGER,
+  abi: PAT_TREASURY_MANAGER_ABI,
+  functionName: 'getTreasuryStats'
+});
+```
 ```javascript
 // Get goal info
 const { data: goalInfo } = useReadContract({
@@ -352,7 +449,91 @@ query GetPetEvolution($tokenId: String!) {
 }
 ```
 
-#### 4. Validation Status
+#### 5. Validation Events
+```graphql
+query GetValidatorDashboard($validatorAddress: String!) {
+  # Validator registration
+  validatorRegistereds(where: { validator: $validatorAddress }) {
+    validator
+    stakedAmount
+    initialReputationScore
+    totalActiveValidators
+    timestamp
+  }
+  
+  # Assigned validations
+  validatorAssigneds(where: { validator: $validatorAddress }) {
+    milestoneId
+    validator
+    validatorReputationScore
+    validatorTotalValidations
+    assignmentIndex
+    timestamp
+  }
+  
+  # Validation submissions
+  validationSubmitteds(where: { validator: $validatorAddress }, orderBy: timestamp, orderDirection: desc) {
+    milestoneId
+    validator
+    approved
+    comment
+    currentApprovals
+    currentRejections
+    timestamp
+  }
+  
+  # Validator rewards
+  validatorRewardeds(where: { validator: $validatorAddress }) {
+    validator
+    milestoneId
+    amount
+    wasAccurate
+    bonusPercentage
+    newReputationScore
+    reason
+    timestamp
+  }
+}
+```
+
+#### 6. Treasury & Rewards Events
+```graphql
+query GetTreasuryData {
+  # Stake distributions (failed goals)
+  stakeDistributeds(orderBy: timestamp, orderDirection: desc) {
+    stakeAmount
+    rewardPoolAmount
+    insurancePoolAmount
+    validatorPoolAmount
+    developmentPoolAmount
+    burnedAmount
+    staker
+    reason
+    timestamp
+  }
+  
+  # Reward distributions (completed goals)
+  rewardDistributeds(orderBy: timestamp, orderDirection: desc) {
+    user
+    stakeAmount
+    totalReward
+    bonusReward
+    tier
+    tierName
+    timestamp
+  }
+  
+  # Pool balance updates
+  poolBalanceUpdateds(orderBy: timestamp, orderDirection: desc) {
+    poolName
+    oldBalance
+    newBalance
+    change
+    reason
+    timestamp
+  }
+}
+```
 ```graphql
 query GetValidationStatus($milestoneId: String!) {
   # Validation request
@@ -414,11 +595,30 @@ subscription UserActivity($userAddress: String!) {
     timestamp
   }
   
-  # Goal completions
+  # Goal completions with rewards
   goalCompleteds(where: { owner: $userAddress }) {
     goalId
     bonusXP
     stakeReward
+    completionTime
+    wasEarlyCompletion
+    timestamp
+  }
+  
+  # Validation assignments (for validators)
+  validatorAssigneds(where: { validator: $userAddress }) {
+    milestoneId
+    validatorReputationScore
+    timestamp
+  }
+  
+  # Reward distributions
+  rewardDistributeds(where: { user: $userAddress }) {
+    stakeAmount
+    totalReward
+    bonusReward
+    tier
+    tierName
     timestamp
   }
 }
@@ -705,10 +905,22 @@ export const validateGoalCreation = (goalData) => {
 1. ✅ Goal creation with milestones
 2. ✅ Pet metadata generation & upload
 3. ✅ Dashboard with goal progress
-4. ✅ Milestone submission
-5. ✅ Evolution animations
-6. ✅ Validation system (admin for MVP)
-7. ⏳ Community validation (post-MVP)
+4. ✅ Milestone submission with evidence
+5. ✅ Validation system (3-7 validators per milestone)
+6. ✅ Pet evolution based on milestone completion
+7. ✅ Treasury rewards distribution
+8. ✅ Validator rewards and reputation system
+9. ⏳ Community governance (post-MVP)
+
+### Complete MVP Flow Summary
+```
+1. User creates goal → Stakes PAT tokens → Pet minted (EGG stage)
+2. User submits evidence → System assigns validators → 72h review period
+3. Validators vote → Milestone approved/rejected → Pet gains XP if approved
+4. Pet evolves: 2 milestones → BABY, 4 milestones → ADULT
+5. Goal completed → Treasury calculates tier rewards → User receives stake + bonus
+6. Failed goals → Stake distributed to treasury pools (60% rewards, 25% insurance, 10% validators, 5% dev, 10% burned)
+```
 
 ---
 
@@ -740,6 +952,24 @@ const testContracts = async () => {
 4. **GraphQL errors**: Confirm Ponder indexer is synced
 5. **Pet images not showing**: Verify Next.js image domains configuration
 6. **Pinata upload fails**: Check JWT token permissions and account quota
+7. **Validation not assigned**: Ensure sufficient active validators (min 3-7 based on stake)
+8. **Rewards not received**: Check goal completion status and treasury pool balances
+9. **Validator registration fails**: Ensure minimum 50 PAT stake requirement
+
+### Validation System Notes
+- **Validator Assignment**: Automatic based on stake tier (3/5/7 validators)
+- **Review Period**: 72 hours maximum per milestone
+- **Decision Logic**: Simple majority vote (>50% approval needed)
+- **Validator Rewards**: 5 PAT base + 25% accuracy bonus + reputation scoring
+- **Reputation System**: Starts at 1000, +10 for accurate votes, -10 for inaccurate
+- **Deactivation**: Validators with <500 reputation are automatically deactivated
+
+### Treasury Economics
+- **Stake Tiers**: 5 tiers from 110% (Sprout) to 300% (Legend) returns
+- **Failed Stake Distribution**: 60% future rewards, 25% insurance, 10% validators, 5% dev, 10% burned
+- **Reward Pool**: Must have sufficient balance to support bonus rewards
+- **Deflationary Mechanism**: 10% of failed stakes permanently burned
+- **Insurance Pool**: Covers extreme cases and system protection
 
 ### Environment Variables Required
 ```env
