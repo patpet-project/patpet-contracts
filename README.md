@@ -1,244 +1,391 @@
-# Pet Pat Frontend Integration Guide
+# Pet Pat MVP Integration Guide
 
 ## Overview
 
-Pet Pat is a milestone-based goal achievement platform where users stake PAT tokens and grow virtual pets through validated progress. Pets evolve based on milestone completion (max 4 milestones per goal).
+Pet Pat is a milestone-based goal achievement platform where users stake PAT tokens and grow virtual pets through milestone completion. Pets evolve based on progress (max 4 milestones per goal).
 
-### Architecture
+### Core Architecture
 ```
-Frontend ↔ Smart Contracts ↔ Ponder Indexer ↔ GraphQL API
+Frontend ↔ Clean Contract Events ↔ Ponder Indexer ↔ GraphQL API
                 ↕
-           Pinata IPFS (Pet Metadata)
+        Pinata IPFS (Pet Metadata & Evidence)
 ```
 
-### Core Components
-- **5 Smart Contracts**: PATToken, PatTreasuryManager, PatValidationSystem, PatNFT, PatGoalManager
-- **Ponder Indexer**: Real-time event indexing with GraphQL API
-- **Pinata IPFS**: Pet metadata and evidence storage
+### Key Components
+- **5 Smart Contracts**: Clean events, no packed data
+- **Ponder Indexer**: Real-time indexing with GraphQL
+- **Pinata SDK**: IPFS storage for metadata and evidence
 
 ---
 
-## Key User Flows
+## MVP User Flows
 
-### 1. Goal Creation Flow (Single Transaction)
+### 1. 🎯 Goal Creation Flow (Primary MVP Flow)
 ```
-User Input → Metadata Upload → createGoalWithMilestones() → Pet Minted → Real-time Updates
-```
-
-**Steps:**
-1. User enters goal details + milestones (max 4)
-2. Frontend uploads pet metadata to Pinata
-3. Call `createGoalWithMilestones()` with IPFS hash
-4. Pet NFT minted automatically (EGG stage)
-5. Ponder indexes events → GraphQL updates
-
-### 2. Milestone Completion Flow
-```
-Evidence Upload → submitMilestone() → Validation → completeMilestone() → Pet Evolution
+Goal Input → Pet Metadata Upload → createGoalWithMilestones() → Pet Minted → Dashboard Update
 ```
 
 **Steps:**
-1. User uploads evidence to Pinata
+1. User fills goal form with 1-4 milestones
+2. Frontend generates and uploads pet metadata to Pinata
+3. Single transaction: `createGoalWithMilestones()` 
+4. Pet NFT auto-minted in EGG stage
+5. Real-time dashboard update via GraphQL
+
+### 2. 📋 Milestone Submission Flow
+```
+Evidence Upload → submitMilestone() → Validation Request → Dashboard Shows "Pending"
+```
+
+**Steps:**
+1. User uploads evidence (image/video) to Pinata
 2. Call `submitMilestone()` with evidence IPFS hash
-3. Validators approve/reject through validation system
-4. Approved milestones trigger pet evolution:
-   - **2 milestones** → EGG evolves to BABY
-   - **4 milestones** → BABY evolves to ADULT (goal completed)
+3. Validation system assigns 3-7 validators automatically
+4. Dashboard shows milestone as "Pending Validation"
 
-### 3. Real-time Updates Flow
+### 3. ✅ Validation & Evolution Flow
 ```
-Contract Events → Ponder Indexer → GraphQL Subscriptions → Frontend Updates
+Validator Decision → completeMilestone() → Pet Evolution → Celebration
 ```
 
-**Key Events to Listen:**
-- `GoalCreated` → Update user dashboard
-- `MilestoneCompleted` → Update progress, check evolution
-- `PetEvolved` → Show evolution animation
-- `GoalCompleted` → Show completion celebration
+**Steps:**
+1. Validators approve/reject milestone
+2. Approved milestones trigger `completeMilestone()`
+3. Pet evolves at checkpoints:
+   - **2 milestones** → EGG → BABY 🐣
+   - **4 milestones** → BABY → ADULT 🦸 (Goal Complete!)
+4. Show evolution animation + rewards
 
 ---
 
 ## Smart Contract Integration
 
-### Contract Addresses Setup
+### Contract Setup
 ```javascript
+// Contract addresses and ABIs
 const CONTRACTS = {
   PAT_TOKEN: "0x...",
-  PAT_TREASURY_MANAGER: "0x...",
-  PAT_VALIDATION_SYSTEM: "0x...",
+  PAT_GOAL_MANAGER: "0x...",
   PAT_NFT: "0x...",
-  PAT_GOAL_MANAGER: "0x..."
+  PAT_VALIDATION_SYSTEM: "0x...",
+  PAT_TREASURY_MANAGER: "0x..."
+};
+
+// Initialize with Wagmi/Viem
+import { useWriteContract, useReadContract } from 'wagmi';
+```
+
+### Core Functions (MVP Priority)
+
+#### 1. Create Goal with Milestones (Single Transaction)
+```javascript
+const { writeContract: createGoal } = useWriteContract();
+
+const handleCreateGoal = async (goalData) => {
+  // 1. Upload pet metadata to Pinata first
+  const metadataIPFS = await uploadPetMetadata(goalData);
+  
+  // 2. Create goal with milestones
+  await createGoal({
+    address: CONTRACTS.PAT_GOAL_MANAGER,
+    abi: PAT_GOAL_MANAGER_ABI,
+    functionName: 'createGoalWithMilestones',
+    args: [
+      goalData.title,                    // string
+      parseEther(goalData.stakeAmount),  // uint256
+      goalData.durationDays,             // uint32
+      goalData.petName,                  // string
+      goalData.petType,                  // 0=DRAGON, 1=CAT, 2=PLANT
+      metadataIPFS,                      // string (from Pinata)
+      goalData.milestoneDescriptions     // string[] (max 4)
+    ]
+  });
 };
 ```
 
-### Primary Functions
-
-#### 1. Goal Creation (Recommended - Single Transaction)
+#### 2. Submit Milestone Evidence
 ```javascript
-await patGoalManager.createGoalWithMilestones(
-  title,                    // string
-  stakeAmount,             // uint96 (max 4 milestones)
-  durationDays,            // uint32
-  petName,                 // string
-  petType,                 // 0=DRAGON, 1=CAT, 2=PLANT
-  petMetadataIPFS,         // string (from Pinata)
-  milestoneDescriptions    // string[] (max 4 descriptions)
-);
+const { writeContract: submitMilestone } = useWriteContract();
+
+const handleSubmitMilestone = async (milestoneId, evidenceFile) => {
+  // 1. Upload evidence to Pinata
+  const evidenceIPFS = await uploadEvidence(evidenceFile);
+  
+  // 2. Submit milestone
+  await submitMilestone({
+    address: CONTRACTS.PAT_GOAL_MANAGER,
+    abi: PAT_GOAL_MANAGER_ABI,
+    functionName: 'submitMilestone',
+    args: [milestoneId, evidenceIPFS]
+  });
+};
 ```
 
-#### 2. Token Approval (Before Goal Creation)
+#### 3. Key Read Functions
 ```javascript
-await patToken.approve(
-  CONTRACTS.PAT_TREASURY_MANAGER,
-  stakeAmount
-);
-```
+// Get goal info
+const { data: goalInfo } = useReadContract({
+  address: CONTRACTS.PAT_GOAL_MANAGER,
+  abi: PAT_GOAL_MANAGER_ABI,
+  functionName: 'getGoalFullInfo',
+  args: [goalId]
+});
 
-#### 3. Milestone Submission
-```javascript
-await patGoalManager.submitMilestone(
-  milestoneId,            // uint256
-  evidenceIPFS            // string (from Pinata)
-);
-```
-
-#### 4. Validator Registration
-```javascript
-await patValidationSystem.registerValidator(
-  stakeAmount             // uint256 (minimum 50 PAT)
-);
-```
-
-#### 5. Validation Submission
-```javascript
-await patValidationSystem.submitValidation(
-  milestoneId,            // uint256
-  approve,                // bool
-  comment                 // string
-);
-```
-
-### Optimized Read Functions
-```javascript
-// Get basic goal info (gas optimized)
-const [owner, stakeAmount, endTime, status, milestonesCompleted, totalMilestones] = 
-  await patGoalManager.getGoalBasicInfo(goalId);
-
-// Get pet info with milestone count
-const [owner, experience, level, petType, stage, goalId, milestonesCompleted] = 
-  await patNFT.getPetBasicInfo(tokenId);
+// Get pet info  
+const { data: petInfo } = useReadContract({
+  address: CONTRACTS.PAT_NFT,
+  abi: PAT_NFT_ABI,
+  functionName: 'getPetFullInfo',
+  args: [tokenId]
+});
 
 // Get evolution thresholds
-const [babyThreshold, adultThreshold, xpPerMilestone, bonusXP] = 
-  await patNFT.getEvolutionThresholds(); // Returns: [2, 4, 25, 100]
+const { data: evolution } = useReadContract({
+  address: CONTRACTS.PAT_NFT,
+  abi: PAT_NFT_ABI,
+  functionName: 'getEvolutionThresholds'
+});
+// Returns: [2, 4, 25, 100] = [babyThreshold, adultThreshold, xpPerMilestone, bonusXP]
 ```
 
 ---
 
-## Pinata IPFS Integration
+## Pinata Integration (Simplified)
 
-### Pet Metadata Structure
+### Setup Pinata SDK
 ```javascript
-const generatePetMetadata = (petData) => ({
-  name: petData.name,
-  description: "A Pat Pet that evolves with milestone achievements",
-  image: `ipfs://${getImageHash(petData.petType, petData.stage)}`,
-  attributes: [
-    { trait_type: "Pet Type", value: getPetTypeName(petData.petType) },
-    { trait_type: "Evolution Stage", value: getStageName(petData.stage) },
-    { trait_type: "Milestones Completed", value: petData.milestonesCompleted },
-    { trait_type: "Max Milestones", value: 4 },
-    { trait_type: "Progress", value: `${petData.milestonesCompleted}/4` },
-    { trait_type: "Goal ID", value: petData.goalId }
-  ],
-  properties: {
-    evolution_based_on: "milestones",
-    max_milestones: 4
-  }
+import { PinataSDK } from "pinata";
+
+const pinata = new PinataSDK({
+  pinataJwt: process.env.NEXT_PUBLIC_PINATA_JWT,
+  pinataGateway: "your-gateway.mypinata.cloud",
 });
 ```
 
-### Upload Functions
+### Pet Metadata Upload
 ```javascript
-// Upload pet metadata
-const uploadMetadata = async (metadata, tokenId) => {
-  const response = await fetch('https://api.pinata.cloud/pinning/pinJSONToIPFS', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'pinata_api_key': PINATA_CONFIG.apiKey,
-      'pinata_secret_api_key': PINATA_CONFIG.secretKey
-    },
-    body: JSON.stringify({
-      pinataContent: metadata,
-      pinataMetadata: { name: `pet-${tokenId}-metadata` }
-    })
-  });
-  return (await response.json()).IpfsHash;
-};
+const uploadPetMetadata = async (goalData) => {
+  const metadata = {
+    name: goalData.petName,
+    description: `${goalData.petName} is a ${getPetTypeName(goalData.petType)} companion in the Egg stage. A mysterious egg filled with potential, waiting to hatch. This Pet Pat grows stronger with each milestone achievement and evolves based on progress towards goals.`,
+    image: getPetImageUrl(goalData.petType, 'EGG'),
+    external_url: `https://patpet.xyz/goal/${goalData.goalId}`,
+    animation_url: getPetSpriteUrl(goalData.petType),
+    attributes: [
+      { trait_type: "Pet Type", value: getPetTypeName(goalData.petType) },
+      { trait_type: "Evolution Stage", value: "Egg" },
+      { trait_type: "Level", value: 1 },
+      { trait_type: "Experience", value: 0 },
+      { trait_type: "Milestones Completed", value: 0 },
+      { trait_type: "Total Milestones", value: goalData.milestoneDescriptions.length },
+      { trait_type: "Progress", value: "0%" },
+      { trait_type: "Goal ID", value: goalData.goalId },
+      { trait_type: "Rarity", value: "Common" },
+      { trait_type: "Element", value: getPetElement(goalData.petType) },
+      { trait_type: "Mood", value: "Happy" },
+      { trait_type: "Birth Time", value: Date.now() }
+    ],
+    properties: {
+      pet_type: getPetTypeKey(goalData.petType),
+      evolution_stage: "EGG",
+      sprite_url: getPetSpriteUrl(goalData.petType),
+      created_at: Date.now(),
+      version: "1.0.0",
+      milestone_based_evolution: true
+    }
+  };
 
-// Upload evidence file
+  const upload = await pinata.upload.public
+    .json(metadata)
+    .name(`${goalData.petName}-metadata.json`)
+    .keyvalues({
+      type: 'pet_metadata',
+      pet_name: goalData.petName,
+      pet_type: getPetTypeKey(goalData.petType),
+      evolution_stage: 'EGG',
+      token_id: 'new',
+      timestamp: Date.now().toString(),
+      version: '1.0.0'
+    });
+    
+  return upload.cid;
+};
+```
+
+### Evidence Upload
+```javascript
 const uploadEvidence = async (file) => {
-  const formData = new FormData();
-  formData.append('file', file);
-  // ... Pinata upload logic
-  return ipfsHash;
+  const upload = await pinata.upload.public
+    .file(file)
+    .name(`milestone-evidence-${Date.now()}`);
+    
+  return upload.cid;
 };
 ```
 
 ---
 
-## Ponder GraphQL Integration
+## Ponder GraphQL Queries
 
-### Essential Queries
+### Essential Queries for MVP
 
-#### User Dashboard
+#### 1. User Dashboard Data
 ```graphql
-query GetUserGoals($userAddress: String!) {
+query GetUserDashboard($userAddress: String!) {
+  # All user goals
   goalCreateds(where: { owner: $userAddress }, orderBy: timestamp, orderDirection: desc) {
     goalId
     petTokenId
-    params_stakeAmount
-    params_totalMilestones
+    title
+    stakeAmount
+    durationDays
+    petName
+    petType
+    totalMilestones
+    endTime
     timestamp
   }
   
+  # Goal completions
   goalCompleteds(where: { owner: $userAddress }) {
     goalId
-    packedRewards
+    bonusXP
+    stakeReward
+    completionTime
+    wasEarlyCompletion
+    timestamp
+  }
+  
+  # Goal failures
+  goalFaileds(where: { owner: $userAddress }) {
+    goalId
+    milestonesCompleted
+    totalMilestones
+    stakeLost
+    failureReason
     timestamp
   }
 }
 ```
 
-#### Goal Progress
+#### 2. Goal Progress & Milestones
 ```graphql
 query GetGoalProgress($goalId: String!) {
-  milestoneCreateds(where: { goalId: $goalId }, orderBy: timestamp) {
-    milestoneId
-    description
+  # Goal details
+  goalCreateds(where: { goalId: $goalId }) {
+    goalId
+    owner
+    title
+    stakeAmount
+    totalMilestones
+    petTokenId
+    endTime
   }
   
+  # All milestones for this goal
+  milestoneCreateds(where: { goalId: $goalId }, orderBy: timestamp) {
+    milestoneId
+    goalId
+    description
+    timestamp
+  }
+  
+  # Milestone submissions
+  milestoneSubmitteds(where: { goalId: $goalId }, orderBy: timestamp) {
+    milestoneId
+    submitter
+    evidenceIPFS
+    timestamp
+  }
+  
+  # Completed milestones
   milestoneCompleteds(where: { goalId: $goalId }, orderBy: timestamp) {
     milestoneId
-    packedData  # Contains: xp(16) | completed(16) | total(16) | progress(16)
+    xpAwarded
+    milestonesCompleted
+    totalMilestones
+    progressPercentage
+    petMetadataIPFS
     timestamp
   }
 }
 ```
 
-#### Pet Evolution History
+#### 3. Pet Evolution History
 ```graphql
 query GetPetEvolution($tokenId: String!) {
-  petEvolveds(where: { tokenId: $tokenId }, orderBy: timestamp) {
-    packedData  # Contains: fromStage(8) | toStage(8) | milestones(8) | totalExp(64)
-    newMetadataIPFSHash
+  # Pet creation
+  petMinteds(where: { tokenId: $tokenId }) {
+    tokenId
+    owner
+    goalId
+    petType
+    stage
+    level
+    name
+    metadataIPFS
     timestamp
   }
   
-  milestoneCompleteds(where: { tokenId: $tokenId }) {
-    packedData
-    newMetadataIPFSHash
+  # Evolution events
+  petEvolveds(where: { tokenId: $tokenId }, orderBy: timestamp) {
+    tokenId
+    goalId
+    fromStage
+    toStage
+    milestonesCompleted
+    totalExperience
+    newMetadataIPFS
+    timestamp
+  }
+  
+  # Experience gains
+  experienceGaineds(where: { tokenId: $tokenId }, orderBy: timestamp) {
+    tokenId
+    experienceAmount
+    newTotalExp
+    oldLevel
+    newLevel
+    reason
+    timestamp
+  }
+}
+```
+
+#### 4. Validation Status
+```graphql
+query GetValidationStatus($milestoneId: String!) {
+  # Validation request
+  validationRequesteds(where: { milestoneId: $milestoneId }) {
+    milestoneId
+    submitter
+    evidenceIPFS
+    goalStakeAmount
+    requiredValidators
+    assignedValidators
+    deadline
+    timestamp
+  }
+  
+  # Validator submissions
+  validationSubmitteds(where: { milestoneId: $milestoneId }, orderBy: timestamp) {
+    milestoneId
+    validator
+    approved
+    comment
+    currentApprovals
+    currentRejections
+    timestamp
+  }
+  
+  # Resolution
+  validationResolveds(where: { milestoneId: $milestoneId }) {
+    milestoneId
+    status
+    totalApprovals
+    totalRejections
+    validators
+    votes
     timestamp
   }
 }
@@ -246,123 +393,248 @@ query GetPetEvolution($tokenId: String!) {
 
 ### Real-time Subscriptions
 ```graphql
-subscription GoalEvents($userAddress: String!) {
+subscription UserActivity($userAddress: String!) {
+  # New milestones completed
   milestoneCompleteds(where: { goalOwner: $userAddress }) {
     goalId
     milestoneId
-    packedData
+    xpAwarded
+    milestonesCompleted
+    progressPercentage
     timestamp
   }
   
+  # Pet evolutions
   petEvolveds(where: { owner: $userAddress }) {
     tokenId
-    packedData
+    goalId
+    fromStage
+    toStage
+    milestonesCompleted
     timestamp
   }
   
+  # Goal completions
   goalCompleteds(where: { owner: $userAddress }) {
     goalId
-    packedRewards
+    bonusXP
+    stakeReward
     timestamp
   }
 }
 ```
 
-### Data Unpacking Helpers
-```javascript
-// Unpack milestone completion data
-const unpackMilestoneData = (packedData) => ({
-  xpAwarded: Number((packedData >> 240n) & 0xFFFFn),
-  milestonesCompleted: Number((packedData >> 224n) & 0xFFFFn),
-  totalMilestones: Number((packedData >> 208n) & 0xFFFFn),
-  progressPercentage: Number((packedData >> 192n) & 0xFFFFn)
-});
+---
 
-// Unpack pet evolution data
-const unpackEvolutionData = (packedData) => ({
-  fromStage: Number((packedData >> 248n) & 0xFFn),
-  toStage: Number((packedData >> 240n) & 0xFFn),
-  milestonesCompleted: Number((packedData >> 232n) & 0xFFn),
-  totalExperience: Number((packedData >> 168n) & ((1n << 64n) - 1n))
-});
+## Frontend Integration
+
+### Key React Hooks
+
+#### 1. Goal Creation Hook
+```javascript
+import { useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
+
+export const useCreateGoal = () => {
+  const { writeContract, data: hash } = useWriteContract();
+  const { isLoading: isConfirming } = useWaitForTransactionReceipt({ hash });
+
+  const createGoal = async (goalData) => {
+    try {
+      // Upload metadata first
+      const metadataIPFS = await uploadPetMetadata(goalData);
+      
+      // Create goal
+      await writeContract({
+        address: CONTRACTS.PAT_GOAL_MANAGER,
+        abi: PAT_GOAL_MANAGER_ABI,
+        functionName: 'createGoalWithMilestones',
+        args: [
+          goalData.title,
+          parseEther(goalData.stakeAmount),
+          goalData.durationDays,
+          goalData.petName,
+          goalData.petType,
+          metadataIPFS,
+          goalData.milestoneDescriptions
+        ]
+      });
+    } catch (error) {
+      console.error('Goal creation failed:', error);
+      throw error;
+    }
+  };
+
+  return { createGoal, isConfirming };
+};
+```
+
+#### 2. User Dashboard Hook
+```javascript
+import { useQuery } from '@apollo/client';
+
+export const useUserDashboard = (userAddress) => {
+  const { data, loading, error } = useQuery(GET_USER_DASHBOARD, {
+    variables: { userAddress },
+    pollInterval: 5000 // Poll every 5 seconds
+  });
+
+  const goals = data?.goalCreateds || [];
+  const completedGoals = data?.goalCompleteds || [];
+  const failedGoals = data?.goalFaileds || [];
+
+  return {
+    goals,
+    completedGoals,
+    failedGoals,
+    loading,
+    error,
+    stats: {
+      total: goals.length,
+      completed: completedGoals.length,
+      failed: failedGoals.length,
+      active: goals.length - completedGoals.length - failedGoals.length
+    }
+  };
+};
+```
+
+#### 3. Goal Progress Hook
+```javascript
+export const useGoalProgress = (goalId) => {
+  const { data } = useQuery(GET_GOAL_PROGRESS, {
+    variables: { goalId },
+    pollInterval: 3000
+  });
+
+  const goal = data?.goalCreateds?.[0];
+  const milestones = data?.milestoneCreateds || [];
+  const completed = data?.milestoneCompleteds || [];
+
+  return {
+    goal,
+    milestones: milestones.map(m => ({
+      ...m,
+      isCompleted: completed.some(c => c.milestoneId === m.milestoneId),
+      completedData: completed.find(c => c.milestoneId === m.milestoneId)
+    })),
+    progress: {
+      completed: completed.length,
+      total: milestones.length,
+      percentage: milestones.length > 0 ? (completed.length / milestones.length) * 100 : 0
+    }
+  };
+};
+```
+
+### Evolution System Integration
+```javascript
+// Evolution helper functions
+export const getEvolutionStage = (milestonesCompleted) => {
+  if (milestonesCompleted >= 4) return { stage: 'ADULT', name: 'Adult', description: 'A fully evolved companion with mastered abilities' };
+  if (milestonesCompleted >= 2) return { stage: 'BABY', name: 'Baby', description: 'A young companion learning and growing with each milestone' };
+  return { stage: 'EGG', name: 'Egg', description: 'A mysterious egg filled with potential, waiting to hatch' };
+};
+
+export const getEvolutionProgress = (milestonesCompleted) => {
+  const totalMilestones = 4;
+  const percentage = (milestonesCompleted / totalMilestones) * 100;
+  
+  return {
+    percentage,
+    nextEvolution: milestonesCompleted < 2 ? 'Baby at 2 milestones' :
+                   milestonesCompleted < 4 ? 'Adult at 4 milestones' : 'Fully evolved!',
+    milestonesUntilNext: milestonesCompleted < 2 ? 2 - milestonesCompleted :
+                        milestonesCompleted < 4 ? 4 - milestonesCompleted : 0
+  };
+};
+
+// Pet type helper functions
+export const getPetTypeName = (petType) => {
+  const types = ["Dragon", "Cat", "Plant"];
+  return types[petType] || "Unknown";
+};
+
+export const getPetTypeKey = (petType) => {
+  const keys = ["DRAGON", "CAT", "PLANT"];
+  return keys[petType] || "UNKNOWN";
+};
+
+export const getPetElement = (petType) => {
+  const elements = ["Fire", "Earth", "Nature"];
+  return elements[petType] || "Unknown";
+};
+
+export const getPetRarity = (petType) => {
+  const rarities = ["Epic", "Common", "Rare"];
+  return rarities[petType] || "Unknown";
+};
+
+// Evolution animation trigger
+export const useEvolutionAnimation = () => {
+  const [showEvolution, setShowEvolution] = useState(false);
+  const [evolutionData, setEvolutionData] = useState(null);
+
+  const triggerEvolution = (fromStage, toStage, petType) => {
+    setEvolutionData({ fromStage, toStage, petType });
+    setShowEvolution(true);
+  };
+
+  return { showEvolution, evolutionData, triggerEvolution, setShowEvolution };
+};
 ```
 
 ---
 
-## Event Handling
+## Event Handling & Real-time Updates
 
-### Key Events to Monitor
-
-#### Milestone Progress
+### Contract Event Listeners
 ```javascript
-// Listen for milestone completion
-patGoalManager.on('MilestoneCompleted', (milestoneId, goalId, goalOwner, packedData, petMetadataIPFS, timestamp) => {
-  const { milestonesCompleted, progressPercentage } = unpackMilestoneData(packedData);
-  
-  // Update progress bar
-  updateProgressBar(progressPercentage);
-  
-  // Check for evolution triggers
-  if (milestonesCompleted === 2) {
-    showEvolutionAlert("Your pet is evolving to BABY! 🐣");
-  } else if (milestonesCompleted === 4) {
-    showEvolutionAlert("Your pet is evolving to ADULT! 🦸");
-  }
-});
-```
+import { useWatchContractEvent } from 'wagmi';
 
-#### Pet Evolution
-```javascript
-// Listen for pet evolution
-patNFT.on('PetEvolved', (tokenId, goalId, owner, packedData, newMetadataIPFS, timestamp) => {
-  const { fromStage, toStage, milestonesCompleted } = unpackEvolutionData(packedData);
-  
-  // Show evolution animation
-  showEvolutionAnimation(fromStage, toStage);
-  
-  // Update pet display
-  updatePetDisplay(newMetadataIPFS);
-});
-```
-
----
-
-## Evolution System
-
-### Milestone-Based Evolution
-```javascript
-const EVOLUTION_SYSTEM = {
-  MAX_MILESTONES: 4,
-  THRESHOLDS: {
-    EGG_TO_BABY: 2,    // Evolve at 2 milestones (50% complete)
-    BABY_TO_ADULT: 4   // Evolve at 4 milestones (100% complete)
-  },
-  XP: {
-    PER_MILESTONE: 25,
-    COMPLETION_BONUS: 100
-  }
+// Watch for milestone completions
+export const useMilestoneEvents = (userAddress) => {
+  useWatchContractEvent({
+    address: CONTRACTS.PAT_GOAL_MANAGER,
+    abi: PAT_GOAL_MANAGER_ABI,
+    eventName: 'MilestoneCompleted',
+    args: { goalOwner: userAddress },
+    onLogs: (logs) => {
+      logs.forEach(log => {
+        const { goalId, milestonesCompleted, progressPercentage } = log.args;
+        
+        // Show progress update
+        toast.success(`Milestone completed! Progress: ${progressPercentage}%`);
+        
+        // Check for evolution
+        if (milestonesCompleted === 2) {
+          triggerEvolution('EGG', 'BABY');
+        } else if (milestonesCompleted === 4) {
+          triggerEvolution('BABY', 'ADULT');
+        }
+      });
+    }
+  });
 };
 
-// Evolution prediction
-const predictEvolution = (currentMilestones) => {
-  if (currentMilestones >= 4) return { stage: 'ADULT', progress: 100 };
-  if (currentMilestones >= 2) return { stage: 'BABY', progress: 50 + (currentMilestones - 2) * 25 };
-  return { stage: 'EGG', progress: currentMilestones * 25 };
-};
-```
-
-### Pet Types & Stages
-```javascript
-const PET_TYPES = {
-  0: { name: 'Dragon', emoji: '🐉' },
-  1: { name: 'Cat', emoji: '🐱' },
-  2: { name: 'Plant', emoji: '🌱' }
-};
-
-const EVOLUTION_STAGES = {
-  0: { name: 'EGG', emoji: '🥚', description: 'Starting your journey' },
-  1: { name: 'BABY', emoji: '👶', description: 'Halfway to your goal!' },
-  2: { name: 'ADULT', emoji: '🦸', description: 'Goal achieved!' }
+// Watch for pet evolutions
+export const usePetEvolutionEvents = (userAddress) => {
+  useWatchContractEvent({
+    address: CONTRACTS.PAT_NFT,
+    abi: PAT_NFT_ABI,
+    eventName: 'PetEvolved',
+    args: { owner: userAddress },
+    onLogs: (logs) => {
+      logs.forEach(log => {
+        const { tokenId, fromStage, toStage } = log.args;
+        
+        // Show evolution celebration
+        showEvolutionCelebration(fromStage, toStage);
+        
+        // Update pet display
+        refetchPetData();
+      });
+    }
+  });
 };
 ```
 
@@ -370,28 +642,37 @@ const EVOLUTION_STAGES = {
 
 ## Error Handling
 
-### Common Error Patterns
+### Transaction Error Handler
 ```javascript
-// Transaction error handler
-const handleTransactionError = (error, operation) => {
-  if (error.code === 'INSUFFICIENT_FUNDS') {
-    showError('Insufficient ETH for gas fees');
+export const handleTransactionError = (error, operation) => {
+  console.error(`${operation} failed:`, error);
+  
+  if (error.message.includes('User rejected')) {
+    toast.error('Transaction cancelled by user');
+  } else if (error.message.includes('insufficient funds')) {
+    toast.error('Insufficient funds for transaction');
   } else if (error.message.includes('TooManyMilestones')) {
-    showError('Maximum 4 milestones allowed per goal');
-  } else if (error.message.includes('MaxMilestonesReached')) {
-    showError('Cannot add more milestones to this goal');
+    toast.error('Maximum 4 milestones allowed per goal');
+  } else if (error.message.includes('InvalidStake')) {
+    toast.error('Invalid stake amount');
   } else {
-    showError(`${operation} failed: ${error.message}`);
+    toast.error(`${operation} failed: ${error.shortMessage || error.message}`);
   }
 };
+```
 
-// Validation before transactions
-const validateGoalCreation = async (milestones, stakeAmount) => {
-  if (milestones.length > 4) throw new Error('Maximum 4 milestones allowed');
-  if (milestones.length === 0) throw new Error('At least 1 milestone required');
+### Validation Helpers
+```javascript
+export const validateGoalCreation = (goalData) => {
+  const errors = [];
   
-  const balance = await patToken.balanceOf(userAddress);
-  if (balance.lt(stakeAmount)) throw new Error('Insufficient PAT balance');
+  if (!goalData.title.trim()) errors.push('Goal title is required');
+  if (!goalData.petName.trim()) errors.push('Pet name is required');
+  if (goalData.milestoneDescriptions.length === 0) errors.push('At least 1 milestone required');
+  if (goalData.milestoneDescriptions.length > 4) errors.push('Maximum 4 milestones allowed');
+  if (parseFloat(goalData.stakeAmount) <= 0) errors.push('Stake amount must be greater than 0');
+  
+  return errors;
 };
 ```
 
@@ -399,34 +680,79 @@ const validateGoalCreation = async (milestones, stakeAmount) => {
 
 ## Quick Reference
 
-### Contract Functions Summary
-| Function | Purpose | Max Milestones |
-|----------|---------|----------------|
-| `createGoalWithMilestones()` | Create goal + milestones (single tx) | 4 |
-| `submitMilestone()` | Submit evidence for validation | - |
-| `completeMilestone()` | Complete milestone (admin/validator) | - |
-| `getPetBasicInfo()` | Get pet data including milestones | - |
-| `getEvolutionThresholds()` | Get evolution milestones (2, 4) | - |
+### Evolution System
+| Milestones | Stage | Description |
+|------------|-------|-------------|
+| 0-1 | Egg | A mysterious egg filled with potential |
+| 2-3 | Baby | A young companion learning and growing |
+| 4 | Adult | A fully evolved companion with mastered abilities |
 
-### Evolution Checkpoints
-- **0-1 milestones**: EGG stage 🥚
-- **2-3 milestones**: BABY stage 👶 (evolves at milestone 2)
-- **4 milestones**: ADULT stage 🦸 (evolves at milestone 4, goal completed)
+### Pet Types
+| Type | Value | Name | Element | Rarity |
+|------|-------|------|---------|---------|
+| DRAGON | 0 | Dragon | Fire | Epic |
+| CAT | 1 | Cat | Earth | Common |
+| PLANT | 2 | Plant | Nature | Rare |
 
 ### Key Constants
-- **Maximum milestones per goal**: 4
+- **Max milestones per goal**: 4
 - **XP per milestone**: 25
 - **Completion bonus**: 100 XP
-- **Evolution triggers**: Milestone count (not XP)
+- **Evolution triggers**: 2 milestones (Baby), 4 milestones (Adult)
+- **Min validator stake**: 50 PAT
+
+### MVP Priority Order
+1. ✅ Goal creation with milestones
+2. ✅ Pet metadata generation & upload
+3. ✅ Dashboard with goal progress
+4. ✅ Milestone submission
+5. ✅ Evolution animations
+6. ✅ Validation system (admin for MVP)
+7. ⏳ Community validation (post-MVP)
 
 ---
 
-## Support
+## Testing & Debugging
 
-### Common Issues
-1. **Pet not evolving**: Check milestone completion count (2 for BABY, 4 for ADULT)
-2. **Transaction fails**: Verify milestone count ≤ 4 and sufficient PAT balance
-3. **Metadata not updating**: Ensure Pinata upload success before contract calls
+### Contract Verification
+```javascript
+// Test contract connections
+const testContracts = async () => {
+  try {
+    const evolution = await patNFT.getEvolutionThresholds();
+    console.log('Evolution thresholds:', evolution); // Should be [2, 4, 25, 100]
+    
+    const balance = await patToken.balanceOf(userAddress);
+    console.log('PAT balance:', formatEther(balance));
+    
+    return { success: true };
+  } catch (error) {
+    console.error('Contract test failed:', error);
+    return { success: false, error };
+  }
+};
+```
+
+### Common Issues & Solutions
+1. **Metadata not loading**: Check Pinata gateway configuration and JWT token
+2. **Evolution not triggering**: Verify milestone completion count (2 for Baby, 4 for Adult)
+3. **Transaction fails**: Check PAT token approval and balance
 4. **GraphQL errors**: Confirm Ponder indexer is synced
+5. **Pet images not showing**: Verify Next.js image domains configuration
+6. **Pinata upload fails**: Check JWT token permissions and account quota
 
-**Remember**: Evolution is milestone-based, making it predictable and goal-oriented! 🎯
+### Environment Variables Required
+```env
+# Pinata Configuration
+NEXT_PUBLIC_PINATA_JWT=your_pinata_jwt_token
+NEXT_PUBLIC_PAT_PET_PINATA_GATEWAY=https://your-gateway.mypinata.cloud
+
+# Contract Addresses (update with deployed addresses)
+NEXT_PUBLIC_PAT_TOKEN_ADDRESS=0x...
+NEXT_PUBLIC_PAT_GOAL_MANAGER_ADDRESS=0x...
+NEXT_PUBLIC_PAT_NFT_ADDRESS=0x...
+NEXT_PUBLIC_PAT_VALIDATION_SYSTEM_ADDRESS=0x...
+NEXT_PUBLIC_PAT_TREASURY_MANAGER_ADDRESS=0x...
+```
+
+Remember: Keep it simple for MVP! Focus on core goal creation → milestone completion → pet evolution flow. 🚀

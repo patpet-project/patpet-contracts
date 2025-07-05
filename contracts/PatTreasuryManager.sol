@@ -7,8 +7,8 @@ import "@openzeppelin/contracts/utils/math/Math.sol";
 import "./PATToken.sol";
 
 /**
- * @title PatTreasuryManager
- * @dev Manages tokenomics, reward distribution, and treasury pools
+ * @title PatTreasuryManager - Clean & Integration-Friendly Version
+ * @dev Treasury management with clean events and readable data structures
  */
 contract PatTreasuryManager is Ownable, ReentrancyGuard {
     using Math for uint256;
@@ -24,7 +24,7 @@ contract PatTreasuryManager is Ownable, ReentrancyGuard {
     // Burn percentage from failed stakes
     uint256 public constant BURN_PERCENTAGE = 1000; // 10%
     
-    // Stake tier multipliers (basis points)
+    // Clean StakeTier struct
     struct StakeTier {
         uint256 minStake;
         uint256 maxStake;
@@ -50,20 +50,96 @@ contract PatTreasuryManager is Ownable, ReentrancyGuard {
     // Authorized contracts
     mapping(address => bool) public authorizedContracts;
     
-    // Events
+    // Clean, readable events
+    event TreasuryInitialized(
+        address indexed owner,
+        address indexed patToken,
+        uint256 timestamp
+    );
+    
     event StakeDistributed(
         uint256 stakeAmount,
-        uint256 rewardPool,
-        uint256 insurancePool,
-        uint256 validatorPool,
-        uint256 developmentPool,
-        uint256 burned
+        uint256 rewardPoolAmount,
+        uint256 insurancePoolAmount,
+        uint256 validatorPoolAmount,
+        uint256 developmentPoolAmount,
+        uint256 burnedAmount,
+        address indexed staker,
+        string reason,
+        uint256 timestamp
     );
-    event RewardCalculated(address indexed user, uint256 stakeAmount, uint256 reward, uint256 tier);
-    event RewardDistributed(address indexed user, uint256 stakeAmount, uint256 bonusReward);
-    event ValidatorRewardDistributed(address indexed validator, uint256 amount);
-    event TreasuryWithdrawal(address indexed recipient, uint256 amount, string pool);
-    event EmergencyWithdrawal(address indexed recipient, uint256 amount);
+    
+    event RewardCalculated(
+        address indexed user,
+        uint256 stakeAmount,
+        uint256 totalReward,
+        uint256 bonusReward,
+        uint256 tier,
+        string tierName,
+        uint256 rewardMultiplier,
+        uint256 timestamp
+    );
+    
+    event RewardDistributed(
+        address indexed user,
+        uint256 stakeAmount,
+        uint256 totalReward,
+        uint256 bonusReward,
+        uint256 tier,
+        string tierName,
+        uint256 timestamp
+    );
+    
+    event ValidatorRewardDistributed(
+        address indexed validator,
+        uint256 amount,
+        string reason,
+        address indexed distributor,
+        uint256 timestamp
+    );
+    
+    event PoolBalanceUpdated(
+        string poolName,
+        uint256 oldBalance,
+        uint256 newBalance,
+        int256 change,
+        string reason,
+        uint256 timestamp
+    );
+    
+    event TreasuryWithdrawal(
+        address indexed recipient,
+        uint256 amount,
+        string poolName,
+        string reason,
+        address indexed withdrawnBy,
+        uint256 timestamp
+    );
+    
+    event EmergencyWithdrawal(
+        address indexed recipient,
+        uint256 amount,
+        string reason,
+        address indexed withdrawnBy,
+        uint256 timestamp
+    );
+    
+    event StakeTierUpdated(
+        uint256 indexed tierIndex,
+        uint256 minStake,
+        uint256 maxStake,
+        uint256 rewardMultiplier,
+        string tierName,
+        address indexed updatedBy,
+        uint256 timestamp
+    );
+    
+    event AuthorizationChanged(
+        address indexed contractAddress,
+        bool authorized,
+        address indexed changedBy,
+        uint256 timestamp
+    );
     
     modifier onlyAuthorized() {
         require(authorizedContracts[msg.sender], "Not authorized");
@@ -73,6 +149,8 @@ contract PatTreasuryManager is Ownable, ReentrancyGuard {
     constructor(address _patToken) Ownable(msg.sender) {
         patToken = PATToken(_patToken);
         _initializeStakeTiers();
+        
+        emit TreasuryInitialized(msg.sender, _patToken, block.timestamp);
     }
     
     function _initializeStakeTiers() internal {
@@ -81,11 +159,21 @@ contract PatTreasuryManager is Ownable, ReentrancyGuard {
         stakeTiers[2] = StakeTier(500 * 10**18, 1999 * 10**18, 15000, "Flourish"); // 500-1999 PAT, 150% return
         stakeTiers[3] = StakeTier(2000 * 10**18, 9999 * 10**18, 20000, "Thrive");  // 2000-9999 PAT, 200% return
         stakeTiers[4] = StakeTier(10000 * 10**18, 50000 * 10**18, 30000, "Legend"); // 10000+ PAT, 300% return
+        
+        // Emit initial tier setup
+        for (uint256 i = 0; i < 5; i++) {
+            emit StakeTierUpdated(
+                i,
+                stakeTiers[i].minStake,
+                stakeTiers[i].maxStake,
+                stakeTiers[i].rewardMultiplier,
+                stakeTiers[i].tierName,
+                msg.sender,
+                block.timestamp
+            );
+        }
     }
     
-    /**
-     * @dev Distribute failed stake to treasury pools
-     */
     function distributeFailedStake(uint256 stakeAmount, address staker) 
         external onlyAuthorized nonReentrant {
         require(stakeAmount > 0, "Stake amount must be greater than 0");
@@ -99,14 +187,20 @@ contract PatTreasuryManager is Ownable, ReentrancyGuard {
         uint256 validatorAmount = (remainingAmount * VALIDATOR_POOL_ALLOCATION) / 10000;
         uint256 developmentAmount = remainingAmount - rewardAmount - insuranceAmount - validatorAmount;
         
-        // Update pool balances
+        // Update pool balances and emit events
+        _updatePoolBalance("reward", rewardPool, rewardPool + rewardAmount, "Failed stake distribution");
         rewardPool += rewardAmount;
+        
+        _updatePoolBalance("insurance", insurancePool, insurancePool + insuranceAmount, "Failed stake distribution");
         insurancePool += insuranceAmount;
+        
+        _updatePoolBalance("validator", validatorPool, validatorPool + validatorAmount, "Failed stake distribution");
         validatorPool += validatorAmount;
+        
+        _updatePoolBalance("development", developmentPool, developmentPool + developmentAmount, "Failed stake distribution");
         developmentPool += developmentAmount;
         
-        // 🔧 FIX: Send tokens to dead address instead of burning (simpler approach)
-        // Burn tokens for deflationary pressure by sending to 0x000...dead
+        // Send tokens to dead address for burning
         address deadAddress = 0x000000000000000000000000000000000000dEaD;
         patToken.transfer(deadAddress, burnAmount);
         totalTokensBurned += burnAmount;
@@ -124,13 +218,13 @@ contract PatTreasuryManager is Ownable, ReentrancyGuard {
             insuranceAmount,
             validatorAmount,
             developmentAmount,
-            burnAmount
+            burnAmount,
+            staker,
+            "Goal failed",
+            block.timestamp
         );
     }
     
-    /**
-     * @dev Calculate reward for successful goal completion
-     */
     function calculateReward(uint256 stakeAmount) 
         public view returns (uint256 totalReward, uint256 bonusReward, uint256 tier) {
         // Get stake tier
@@ -143,54 +237,86 @@ contract PatTreasuryManager is Ownable, ReentrancyGuard {
         
         // Check if reward pool has enough balance
         if (bonusReward > rewardPool) {
-            // Reduce bonus if insufficient funds
             bonusReward = rewardPool;
             totalReward = stakeAmount + bonusReward;
         }
     }
     
-    /**
-     * @dev Distribute reward for successful goal completion
-     */
     function distributeGoalReward(address user, uint256 stakeAmount) 
         external onlyAuthorized nonReentrant returns (uint256) {
         (uint256 totalReward, uint256 bonusReward, uint256 tier) = calculateReward(stakeAmount);
+        StakeTier memory stakeTier = stakeTiers[tier];
+        
+        emit RewardCalculated(
+            user,
+            stakeAmount,
+            totalReward,
+            bonusReward,
+            tier,
+            stakeTier.tierName,
+            stakeTier.rewardMultiplier,
+            block.timestamp
+        );
         
         // Transfer original stake back
         require(patToken.transfer(user, stakeAmount), "Failed to return stake");
         
         // Mint bonus reward from reward pool
         if (bonusReward > 0) {
+            _updatePoolBalance("reward", rewardPool, rewardPool - bonusReward, "Goal completion reward");
             rewardPool -= bonusReward;
-            patToken.mint(user, bonusReward);
+            
+            patToken.distributeReward(user, bonusReward, "Goal completion bonus");
             totalRewardsDistributed += bonusReward;
         }
         
         // Update statistics
         totalGoalsCompleted += 1;
         
-        emit RewardCalculated(user, stakeAmount, totalReward, tier);
-        emit RewardDistributed(user, stakeAmount, bonusReward);
+        emit RewardDistributed(
+            user,
+            stakeAmount,
+            totalReward,
+            bonusReward,
+            tier,
+            stakeTier.tierName,
+            block.timestamp
+        );
         
         return totalReward;
     }
     
-    /**
-     * @dev Distribute reward to validator
-     */
     function distributeValidatorReward(address validator, uint256 amount) 
         external onlyAuthorized nonReentrant {
         require(amount <= validatorPool, "Insufficient validator pool balance");
         
+        _updatePoolBalance("validator", validatorPool, validatorPool - amount, "Validator reward");
         validatorPool -= amount;
-        patToken.mint(validator, amount);
         
-        emit ValidatorRewardDistributed(validator, amount);
+        patToken.distributeReward(validator, amount, "Validation reward");
+        
+        emit ValidatorRewardDistributed(
+            validator,
+            amount,
+            "Validation reward",
+            msg.sender,
+            block.timestamp
+        );
     }
     
-    /**
-     * @dev Get stake tier based on amount
-     */
+    function _updatePoolBalance(string memory poolName, uint256 oldBalance, uint256 newBalance, string memory reason) internal {
+        int256 change = int256(newBalance) - int256(oldBalance);
+        
+        emit PoolBalanceUpdated(
+            poolName,
+            oldBalance,
+            newBalance,
+            change,
+            reason,
+            block.timestamp
+        );
+    }
+    
     function getStakeTier(uint256 stakeAmount) public view returns (uint256) {
         for (uint256 i = 0; i < stakeTiers.length; i++) {
             if (stakeAmount >= stakeTiers[i].minStake && stakeAmount <= stakeTiers[i].maxStake) {
@@ -201,24 +327,15 @@ contract PatTreasuryManager is Ownable, ReentrancyGuard {
         return stakeTiers.length - 1;
     }
     
-    /**
-     * @dev Get stake tier info
-     */
     function getStakeTierInfo(uint256 tier) external view returns (StakeTier memory) {
         require(tier < stakeTiers.length, "Invalid tier");
         return stakeTiers[tier];
     }
     
-    /**
-     * @dev Get all stake tiers
-     */
     function getAllStakeTiers() external view returns (StakeTier[5] memory) {
         return stakeTiers;
     }
     
-    /**
-     * @dev Get treasury pool balances
-     */
     function getPoolBalances() external view returns (
         uint256 reward,
         uint256 insurance,
@@ -228,9 +345,6 @@ contract PatTreasuryManager is Ownable, ReentrancyGuard {
         return (rewardPool, insurancePool, validatorPool, developmentPool);
     }
     
-    /**
-     * @dev Get treasury statistics
-     */
     function getTreasuryStats() external view returns (
         uint256 totalStakes,
         uint256 totalRewards,
@@ -252,50 +366,43 @@ contract PatTreasuryManager is Ownable, ReentrancyGuard {
         }
     }
     
-    /**
-     * @dev Check if reward pool can support a potential reward
-     */
     function canSupportReward(uint256 stakeAmount) external view returns (bool) {
         (, uint256 bonusReward,) = calculateReward(stakeAmount);
         return bonusReward <= rewardPool;
     }
     
-    /**
-     * @dev Emergency withdrawal from development pool (owner only)
-     */
-    function emergencyWithdraw(address recipient, uint256 amount) 
+    function emergencyWithdraw(address recipient, uint256 amount, string memory reason) 
         external onlyOwner nonReentrant {
         require(amount <= developmentPool, "Insufficient development pool balance");
         
+        _updatePoolBalance("development", developmentPool, developmentPool - amount, reason);
         developmentPool -= amount;
-        patToken.mint(recipient, amount);
         
-        emit EmergencyWithdrawal(recipient, amount);
+        patToken.mintWithReason(recipient, amount, reason);
+        
+        emit EmergencyWithdrawal(recipient, amount, reason, msg.sender, block.timestamp);
     }
     
-    /**
-     * @dev Withdraw from specific treasury pool (owner only)
-     */
-    function withdrawFromPool(string memory poolName, address recipient, uint256 amount) 
+    function withdrawFromPool(string memory poolName, address recipient, uint256 amount, string memory reason) 
         external onlyOwner nonReentrant {
         
         if (keccak256(bytes(poolName)) == keccak256(bytes("development"))) {
             require(amount <= developmentPool, "Insufficient balance");
+            _updatePoolBalance("development", developmentPool, developmentPool - amount, reason);
             developmentPool -= amount;
         } else if (keccak256(bytes(poolName)) == keccak256(bytes("insurance"))) {
             require(amount <= insurancePool, "Insufficient balance");
+            _updatePoolBalance("insurance", insurancePool, insurancePool - amount, reason);
             insurancePool -= amount;
         } else {
             revert("Invalid pool name");
         }
         
-        patToken.mint(recipient, amount);
-        emit TreasuryWithdrawal(recipient, amount, poolName);
+        patToken.mintWithReason(recipient, amount, reason);
+        
+        emit TreasuryWithdrawal(recipient, amount, poolName, reason, msg.sender, block.timestamp);
     }
     
-    /**
-     * @dev Update stake tier multipliers (owner only)
-     */
     function updateStakeTier(
         uint256 tierIndex,
         uint256 minStake,
@@ -307,25 +414,30 @@ contract PatTreasuryManager is Ownable, ReentrancyGuard {
         require(rewardMultiplier >= 10000, "Multiplier must be at least 100%");
         
         stakeTiers[tierIndex] = StakeTier(minStake, maxStake, rewardMultiplier, tierName);
+        
+        emit StakeTierUpdated(
+            tierIndex,
+            minStake,
+            maxStake,
+            rewardMultiplier,
+            tierName,
+            msg.sender,
+            block.timestamp
+        );
     }
     
-    /**
-     * @dev Add authorized contract
-     */
     function addAuthorizedContract(address contractAddress) external onlyOwner {
         authorizedContracts[contractAddress] = true;
+        
+        emit AuthorizationChanged(contractAddress, true, msg.sender, block.timestamp);
     }
     
-    /**
-     * @dev Remove authorized contract
-     */
     function removeAuthorizedContract(address contractAddress) external onlyOwner {
         authorizedContracts[contractAddress] = false;
+        
+        emit AuthorizationChanged(contractAddress, false, msg.sender, block.timestamp);
     }
     
-    /**
-     * @dev Receive PAT tokens (for failed stakes)
-     */
     function receiveStake(uint256 amount) external onlyAuthorized {
         require(patToken.transferFrom(msg.sender, address(this), amount), "Transfer failed");
     }

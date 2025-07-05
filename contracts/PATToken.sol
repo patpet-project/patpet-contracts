@@ -7,15 +7,14 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 
 /**
- * @title PATToken - Ponder Optimized
- * @dev ERC20 token with comprehensive event logging for Ponder indexing
- * Removed view functions - use Ponder indexer instead!
+ * @title PATToken - Clean & Integration-Friendly Version
+ * @dev ERC20 token with clean events for easy integration and data processing
  */
 contract PATToken is ERC20, ERC20Burnable, Ownable, Pausable {
     
     uint256 public constant MAX_SUPPLY = 100_000_000 * 10**18;
     
-    // Track totals (updated via events in Ponder)
+    // Track totals
     uint256 public totalRewardsDistributed;
     uint256 public totalStakesLost;
     
@@ -23,7 +22,7 @@ contract PATToken is ERC20, ERC20Burnable, Ownable, Pausable {
     mapping(address => bool) public authorizedMinters;
     mapping(address => bool) public authorizedBurners;
     
-    // 🎯 PONDER EVENTS - Comprehensive event logging
+    // Clean, readable events
     event TokensInitialized(
         address indexed owner,
         uint256 initialSupply,
@@ -45,6 +44,7 @@ contract PATToken is ERC20, ERC20Burnable, Ownable, Pausable {
         address indexed minter,
         uint256 newTotalSupply,
         uint256 remainingMintable,
+        string reason,
         uint256 timestamp
     );
     
@@ -53,6 +53,7 @@ contract PATToken is ERC20, ERC20Burnable, Ownable, Pausable {
         uint256 amount,
         address indexed burner,
         uint256 newTotalSupply,
+        string reason,
         uint256 timestamp
     );
     
@@ -76,20 +77,13 @@ contract PATToken is ERC20, ERC20Burnable, Ownable, Pausable {
     
     event ContractPaused(
         address indexed pauser,
+        string reason,
         uint256 timestamp
     );
     
     event ContractUnpaused(
         address indexed unpauser,
-        uint256 timestamp
-    );
-    
-    event EcosystemSnapshot(
-        uint256 totalSupply,
-        uint256 maxSupply,
-        uint256 totalRewardsDistributed,
-        uint256 totalStakesLost,
-        uint256 remainingMintable,
+        string reason,
         uint256 timestamp
     );
     
@@ -107,16 +101,10 @@ contract PATToken is ERC20, ERC20Burnable, Ownable, Pausable {
         uint256 initialSupply = 50_000_000 * 10**18;
         _mint(msg.sender, initialSupply);
         
-        // 🎯 PONDER EVENT: Contract initialization
-        emit TokensInitialized(msg.sender, initialSupply, MAX_SUPPLY, block.timestamp);
-        
-        // Initial ecosystem snapshot
-        emit EcosystemSnapshot(
-            initialSupply,
-            MAX_SUPPLY,
-            0, // totalRewardsDistributed
-            0, // totalStakesLost  
-            MAX_SUPPLY - initialSupply,
+        emit TokensInitialized(
+            msg.sender, 
+            initialSupply, 
+            MAX_SUPPLY, 
             block.timestamp
         );
     }
@@ -126,13 +114,30 @@ contract PATToken is ERC20, ERC20Burnable, Ownable, Pausable {
         
         _mint(to, amount);
         
-        // 🎯 PONDER EVENT: Detailed mint tracking
         emit TokensMinted(
             to,
             amount,
             msg.sender,
             totalSupply(),
             MAX_SUPPLY - totalSupply(),
+            "Standard mint",
+            block.timestamp
+        );
+    }
+    
+    function mintWithReason(address to, uint256 amount, string memory reason) 
+        external onlyAuthorizedMinter whenNotPaused {
+        require(totalSupply() + amount <= MAX_SUPPLY, "Would exceed max supply");
+        
+        _mint(to, amount);
+        
+        emit TokensMinted(
+            to,
+            amount,
+            msg.sender,
+            totalSupply(),
+            MAX_SUPPLY - totalSupply(),
+            reason,
             block.timestamp
         );
     }
@@ -140,12 +145,26 @@ contract PATToken is ERC20, ERC20Burnable, Ownable, Pausable {
     function burnFrom(address account, uint256 amount) public override onlyAuthorizedBurner whenNotPaused {
         super.burnFrom(account, amount);
         
-        // 🎯 PONDER EVENT: Detailed burn tracking
         emit TokensBurned(
             account,
             amount,
             msg.sender,
             totalSupply(),
+            "Standard burn",
+            block.timestamp
+        );
+    }
+    
+    function burnFromWithReason(address account, uint256 amount, string memory reason) 
+        external onlyAuthorizedBurner whenNotPaused {
+        super.burnFrom(account, amount);
+        
+        emit TokensBurned(
+            account,
+            amount,
+            msg.sender,
+            totalSupply(),
+            reason,
             block.timestamp
         );
     }
@@ -157,7 +176,6 @@ contract PATToken is ERC20, ERC20Burnable, Ownable, Pausable {
         _mint(recipient, amount);
         totalRewardsDistributed += amount;
         
-        // 🎯 PONDER EVENT: Detailed reward tracking
         emit RewardDistributed(
             recipient,
             amount,
@@ -166,13 +184,22 @@ contract PATToken is ERC20, ERC20Burnable, Ownable, Pausable {
             totalRewardsDistributed,
             block.timestamp
         );
+        
+        emit TokensMinted(
+            recipient,
+            amount,
+            msg.sender,
+            totalSupply(),
+            MAX_SUPPLY - totalSupply(),
+            string(abi.encodePacked("Reward: ", reason)),
+            block.timestamp
+        );
     }
     
     function recordStakeLoss(address user, uint256 amount, string memory reason) 
         external onlyAuthorizedBurner {
         totalStakesLost += amount;
         
-        // 🎯 PONDER EVENT: Detailed stake loss tracking
         emit StakeLostRecorded(
             user,
             amount,
@@ -186,63 +213,91 @@ contract PATToken is ERC20, ERC20Burnable, Ownable, Pausable {
     function addAuthorizedMinter(address minter) external onlyOwner {
         authorizedMinters[minter] = true;
         
-        // 🎯 PONDER EVENT: Authorization changes
-        emit AuthorizationChanged(minter, "minter", true, msg.sender, block.timestamp);
+        emit AuthorizationChanged(
+            minter, 
+            "minter", 
+            true, 
+            msg.sender, 
+            block.timestamp
+        );
     }
     
     function removeAuthorizedMinter(address minter) external onlyOwner {
         authorizedMinters[minter] = false;
         
-        // 🎯 PONDER EVENT: Authorization changes
-        emit AuthorizationChanged(minter, "minter", false, msg.sender, block.timestamp);
+        emit AuthorizationChanged(
+            minter, 
+            "minter", 
+            false, 
+            msg.sender, 
+            block.timestamp
+        );
     }
     
     function addAuthorizedBurner(address burner) external onlyOwner {
         authorizedBurners[burner] = true;
         
-        // 🎯 PONDER EVENT: Authorization changes
-        emit AuthorizationChanged(burner, "burner", true, msg.sender, block.timestamp);
+        emit AuthorizationChanged(
+            burner, 
+            "burner", 
+            true, 
+            msg.sender, 
+            block.timestamp
+        );
     }
     
     function removeAuthorizedBurner(address burner) external onlyOwner {
         authorizedBurners[burner] = false;
         
-        // 🎯 PONDER EVENT: Authorization changes
-        emit AuthorizationChanged(burner, "burner", false, msg.sender, block.timestamp);
+        emit AuthorizationChanged(
+            burner, 
+            "burner", 
+            false, 
+            msg.sender, 
+            block.timestamp
+        );
     }
     
-    function pause() external onlyOwner {
+    function pause(string memory reason) external onlyOwner {
         _pause();
         
-        // 🎯 PONDER EVENT: Contract state changes
-        emit ContractPaused(msg.sender, block.timestamp);
+        emit ContractPaused(msg.sender, reason, block.timestamp);
     }
     
-    function unpause() external onlyOwner {
+    function unpause(string memory reason) external onlyOwner {
         _unpause();
         
-        // 🎯 PONDER EVENT: Contract state changes
-        emit ContractUnpaused(msg.sender, block.timestamp);
+        emit ContractUnpaused(msg.sender, reason, block.timestamp);
     }
     
-    /**
-     * @dev Emit ecosystem snapshot (can be called by anyone for data sync)
-     */
-    function emitEcosystemSnapshot() external {
-        emit EcosystemSnapshot(
+    // View functions
+    function getEcosystemStats() external view returns (
+        uint256 currentSupply,
+        uint256 maxSupply,
+        uint256 totalRewards,
+        uint256 totalStakesLostAmount,
+        uint256 remainingMintable,
+        uint256 circulatingSupply
+    ) {
+        return (
             totalSupply(),
             MAX_SUPPLY,
             totalRewardsDistributed,
             totalStakesLost,
             MAX_SUPPLY - totalSupply(),
-            block.timestamp
+            totalSupply()
         );
+    }
+    
+    function isAuthorizedMinter(address account) external view returns (bool) {
+        return authorizedMinters[account];
+    }
+    
+    function isAuthorizedBurner(address account) external view returns (bool) {
+        return authorizedBurners[account];
     }
     
     function _update(address from, address to, uint256 value) internal override whenNotPaused {
         super._update(from, to, value);
     }
-    
-    // 🚫 REMOVED: All view functions (getEcosystemStats, etc.)
-    // Use Ponder indexer to query this data instead!
 }

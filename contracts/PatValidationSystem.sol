@@ -8,8 +8,8 @@ import "./PATToken.sol";
 import "./PatTreasuryManager.sol";
 
 /**
- * @title ValidationSystem - Ponder Optimized
- * @dev Community validation with comprehensive event logging for Ponder indexing
+ * @title PatValidationSystem - Clean & Integration-Friendly Version
+ * @dev Community validation with clean events and readable data structures
  */
 contract PatValidationSystem is Ownable, ReentrancyGuard {
     using Math for uint256;
@@ -19,6 +19,7 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
     
     enum ValidationStatus { PENDING, APPROVED, REJECTED, DISPUTED }
     
+    // Clean Validator struct
     struct Validator {
         address validatorAddress;
         uint256 stakedAmount;
@@ -30,6 +31,7 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
         uint256 lastValidationTime;
     }
     
+    // Clean ValidationRequest struct
     struct ValidationRequest {
         uint256 milestoneId;
         address submitter;
@@ -46,6 +48,7 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
         ValidationStatus status;
         bool isResolved;
         uint256 createdAt;
+        uint256 resolvedAt;
     }
     
     // Constants
@@ -68,7 +71,7 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
     
     mapping(address => bool) public authorizedContracts;
     
-    // 🎯 PONDER EVENTS - Comprehensive validation tracking
+    // Clean, readable events
     event ValidationSystemInitialized(
         address indexed owner,
         address indexed patToken,
@@ -114,6 +117,7 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
         address indexed validator,
         uint256 validatorReputationScore,
         uint256 validatorTotalValidations,
+        uint256 assignmentIndex,
         uint256 timestamp
     );
     
@@ -147,6 +151,7 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
         bool wasAccurate,
         uint256 bonusPercentage,
         uint256 newReputationScore,
+        string reason,
         uint256 timestamp
     );
     
@@ -158,16 +163,7 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
         uint256 totalValidations,
         uint256 accurateValidations,
         uint256 accuracyRate, // basis points
-        uint256 timestamp
-    );
-    
-    event ValidationStatistics(
-        uint256 totalRequests,
-        uint256 totalCompleted,
-        uint256 totalActiveValidators,
-        uint256 totalRewardsDistributed,
-        uint256 averageValidationTime,
-        uint256 systemAccuracyRate, // basis points
+        string reason,
         uint256 timestamp
     );
     
@@ -192,7 +188,6 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
         patToken = PATToken(_patToken);
         treasuryManager = PatTreasuryManager(_treasuryManager);
         
-        // 🎯 PONDER EVENT: System initialization
         emit ValidationSystemInitialized(
             msg.sender,
             _patToken,
@@ -202,8 +197,6 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
             VALIDATION_DEADLINE,
             block.timestamp
         );
-        
-        _emitStatistics();
     }
     
     function registerValidator(uint256 stakeAmount) external nonReentrant {
@@ -224,7 +217,6 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
         
         activeValidators.push(msg.sender);
         
-        // 🎯 PONDER EVENT: Validator registration
         emit ValidatorRegistered(
             msg.sender,
             stakeAmount,
@@ -232,8 +224,6 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
             activeValidators.length,
             block.timestamp
         );
-        
-        _emitStatistics();
     }
     
     function deactivateValidator() external nonReentrant onlyActiveValidator {
@@ -248,7 +238,6 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
         validator.isActive = false;
         _removeFromActiveValidators(msg.sender);
         
-        // 🎯 PONDER EVENT: Validator deactivation
         emit ValidatorDeactivated(
             msg.sender,
             "Self-deactivation",
@@ -259,8 +248,6 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
             msg.sender,
             block.timestamp
         );
-        
-        _emitStatistics();
     }
     
     function requestValidation(
@@ -289,7 +276,6 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
         
         totalValidationRequests += 1;
         
-        // 🎯 PONDER EVENT: Validation request
         emit ValidationRequested(
             milestoneId,
             submitter,
@@ -300,8 +286,6 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
             request.deadline,
             block.timestamp
         );
-        
-        _emitStatistics();
     }
     
     function submitValidation(
@@ -331,7 +315,6 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
         validators[msg.sender].totalValidations += 1;
         validators[msg.sender].lastValidationTime = block.timestamp;
         
-        // 🎯 PONDER EVENT: Validation submission
         emit ValidationSubmitted(
             milestoneId,
             msg.sender,
@@ -360,6 +343,7 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
         }
         
         request.isResolved = true;
+        request.resolvedAt = block.timestamp;
         
         // Prepare data for event
         bool[] memory votes = new bool[](request.assignedValidators.length);
@@ -367,7 +351,6 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
             votes[i] = request.votes[request.assignedValidators[i]];
         }
         
-        // 🎯 PONDER EVENT: Validation resolution
         emit ValidationResolved(
             milestoneId,
             request.status,
@@ -384,7 +367,6 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
         _distributeValidatorRewards(milestoneId);
         
         totalValidationsCompleted += 1;
-        _emitStatistics();
     }
     
     function _distributeValidatorRewards(uint256 milestoneId) internal {
@@ -402,13 +384,16 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
                 
                 uint256 reward = baseReward;
                 uint256 bonusPercentage = 0;
+                string memory rewardReason;
                 
                 if (wasAccurate) {
                     bonusPercentage = 25; // 25% bonus
                     reward = reward + ((baseReward * bonusPercentage) / 100);
                     validators[validatorAddr].accurateValidations += 1;
+                    rewardReason = "Accurate validation with bonus";
                 } else {
                     reward = (reward * 50) / 100; // 50% penalty
+                    rewardReason = "Inaccurate validation with penalty";
                 }
                 
                 // Update reputation
@@ -419,7 +404,6 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
                 treasuryManager.distributeValidatorReward(validatorAddr, reward);
                 totalValidatorRewardsDistributed += reward;
                 
-                // 🎯 PONDER EVENT: Validator reward
                 emit ValidatorRewarded(
                     validatorAddr,
                     milestoneId,
@@ -427,6 +411,7 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
                     wasAccurate,
                     bonusPercentage,
                     validators[validatorAddr].reputationScore,
+                    rewardReason,
                     block.timestamp
                 );
             }
@@ -436,22 +421,24 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
     function _updateReputation(address validatorAddr, bool wasAccurate) internal {
         Validator storage validator = validators[validatorAddr];
         uint256 oldReputation = validator.reputationScore;
+        string memory reason;
         
         if (wasAccurate) {
             validator.reputationScore += 10;
             if (validator.reputationScore > 2000) {
                 validator.reputationScore = 2000;
             }
+            reason = "Accurate validation";
         } else {
             if (validator.reputationScore > 10) {
                 validator.reputationScore -= 10;
             }
+            reason = "Inaccurate validation";
         }
         
         uint256 accuracyRate = validator.totalValidations > 0 ? 
             (validator.accurateValidations * 10000) / validator.totalValidations : 0;
         
-        // 🎯 PONDER EVENT: Reputation update
         emit ReputationUpdated(
             validatorAddr,
             oldReputation,
@@ -460,6 +447,7 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
             validator.totalValidations,
             validator.accurateValidations,
             accuracyRate,
+            reason,
             block.timestamp
         );
         
@@ -501,12 +489,12 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
             if (!alreadyAssigned && validators[validator].isActive) {
                 request.assignedValidators.push(validator);
                 
-                // 🎯 PONDER EVENT: Validator assignment
                 emit ValidatorAssigned(
                     milestoneId,
                     validator,
                     validators[validator].reputationScore,
                     validators[validator].totalValidations,
+                    request.assignedValidators.length - 1,
                     block.timestamp
                 );
             }
@@ -544,13 +532,14 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
         }
     }
     
-    function forceResolveValidation(uint256 milestoneId, ValidationStatus status) 
+    function forceResolveValidation(uint256 milestoneId, ValidationStatus status, string memory reason) 
         external onlyOwner {
         ValidationRequest storage request = validationRequests[milestoneId];
         require(!request.isResolved, "Already resolved");
         
         request.status = status;
         request.isResolved = true;
+        request.resolvedAt = block.timestamp;
         
         bool[] memory emptyVotes = new bool[](0);
         address[] memory emptyValidators = new address[](0);
@@ -571,50 +560,75 @@ contract PatValidationSystem is Ownable, ReentrancyGuard {
     function addAuthorizedContract(address contractAddress) external onlyOwner {
         authorizedContracts[contractAddress] = true;
         
-        // 🎯 PONDER EVENT: Authorization change
         emit AuthorizationChanged(contractAddress, true, msg.sender, block.timestamp);
     }
     
     function removeAuthorizedContract(address contractAddress) external onlyOwner {
         authorizedContracts[contractAddress] = false;
         
-        // 🎯 PONDER EVENT: Authorization change
         emit AuthorizationChanged(contractAddress, false, msg.sender, block.timestamp);
     }
     
-    /**
-     * @dev Emit current system statistics
-     */
-    function _emitStatistics() internal {
-        uint256 systemAccuracyRate = 0;
-        uint256 averageValidationTime = 0;
-        
-        // Calculate system-wide accuracy (simplified)
-        if (totalValidationsCompleted > 0) {
-            // This is a simplified calculation - in real implementation,
-            // you'd track this more precisely
-            systemAccuracyRate = 7500; // 75% placeholder
-            averageValidationTime = 24 hours; // 24h placeholder
-        }
-        
-        emit ValidationStatistics(
-            totalValidationRequests,
-            totalValidationsCompleted,
-            activeValidators.length,
-            totalValidatorRewardsDistributed,
-            averageValidationTime,
-            systemAccuracyRate,
-            block.timestamp
+    // View functions
+    function getValidatorInfo(address validatorAddr) external view returns (Validator memory) {
+        return validators[validatorAddr];
+    }
+    
+    function getValidationRequestBasicInfo(uint256 milestoneId) external view returns (
+        uint256 milestoneIdReturn,
+        address submitter,
+        string memory evidenceIPFS,
+        uint256 goalStakeAmount,
+        uint256 requiredValidators,
+        uint256 approvals,
+        uint256 rejections,
+        uint256 deadline,
+        ValidationStatus status,
+        bool isResolved
+    ) {
+        ValidationRequest storage request = validationRequests[milestoneId];
+        return (
+            request.milestoneId,
+            request.submitter,
+            request.evidenceIPFS,
+            request.goalStakeAmount,
+            request.requiredValidators,
+            request.approvals,
+            request.rejections,
+            request.deadline,
+            request.status,
+            request.isResolved
         );
     }
     
-    /**
-     * @dev Public function to emit statistics (for data sync)
-     */
-    function emitStatistics() external {
-        _emitStatistics();
+    function getValidationRequestValidators(uint256 milestoneId) external view returns (address[] memory) {
+        return validationRequests[milestoneId].assignedValidators;
     }
     
-    // 🚫 REMOVED: All view functions (getValidationRequest, getValidatorDetails, etc.)
-    // Use Ponder indexer to query this data instead!
+    function getValidatorVote(uint256 milestoneId, address validator) external view returns (bool hasVoted, bool vote, string memory comment) {
+        ValidationRequest storage request = validationRequests[milestoneId];
+        return (
+            request.hasVoted[validator],
+            request.votes[validator],
+            request.comments[validator]
+        );
+    }
+    
+    function getActiveValidators() external view returns (address[] memory) {
+        return activeValidators;
+    }
+    
+    function getSystemStats() external view returns (
+        uint256 totalRequests,
+        uint256 totalCompleted,
+        uint256 totalActiveValidatorsCount,
+        uint256 totalRewardsDistributed
+    ) {
+        return (
+            totalValidationRequests,
+            totalValidationsCompleted,
+            activeValidators.length,
+            totalValidatorRewardsDistributed
+        );
+    }
 }
